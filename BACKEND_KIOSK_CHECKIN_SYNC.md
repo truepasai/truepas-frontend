@@ -5,6 +5,8 @@
 **Date:** 10 Oct 2026
 **Priority:** High. The boss demo shows the kiosk check-in, but the app shows no check-in afterwards.
 
+> **Follow-up (12 Oct 2026):** root cause traced across all five backend repos. See [BACKEND_CHECKIN_PIPELINE_ISSUE.md](BACKEND_CHECKIN_PIPELINE_ISSUE.md). event-relay-service in memory mode with no `CONSUMER_URLS` accepts check-in events and delivers them nowhere. That doc covers how to confirm it on dev and the recovery steps.
+
 ---
 
 ## 1. The problem in one paragraph

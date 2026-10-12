@@ -56,6 +56,14 @@
       ],
       "expo-secure-store",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Camera is required for document scanning and face recognition",
+          "microphonePermission": "TruePas does not record audio. This permission is required by the camera component.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": {
