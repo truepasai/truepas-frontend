@@ -43,28 +43,34 @@ export function Logo({ size = 22, color = C.sky }: { size?: number; color?: stri
   );
 }
 
-/** `ring`: the mark sits in a glass circle (the identity card's style for
- *  framed things, like the photo and family initials). */
+/** `ring`: the mark in a sky-blue badge with a soft glow, like the tab
+ *  bar's scan button (the identity card uses it). */
 export function Wordmark({ light, size = 20, ring }: { light?: boolean; size?: number; ring?: boolean }) {
-  const mark = <Logo size={size * 0.9} color={light ? C.white : C.sky} />;
   return (
-    <Row gap={8}>
+    <Row gap={9}>
       {ring ? (
-        <View
-          style={{
-            width: size * 1.8,
-            height: size * 1.8,
-            borderRadius: size * 0.9,
-            backgroundColor: "rgba(255,255,255,0.14)",
-            borderWidth: 1,
-            borderColor: "rgba(255,255,255,0.28)",
-            alignItems: "center",
-            justifyContent: "center",
-          }}>
-          {mark}
+        <View style={{ borderRadius: size, boxShadow: "0px 4px 14px rgba(8,182,252,0.45)" }}>
+          <LinearGradient
+            colors={["#2EC4FF", C.skyPressed]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+              width: size * 2,
+              height: size * 2,
+              borderRadius: size,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.35)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}>
+            {/* The mark is wider than tall and weighted left: nudge it to look centred. */}
+            <View style={{ marginLeft: size * 0.1 }}>
+              <Logo size={size * 0.76} color={C.white} />
+            </View>
+          </LinearGradient>
         </View>
       ) : (
-        mark
+        <Logo size={size * 0.9} color={light ? C.white : C.sky} />
       )}
       <Text style={{ fontFamily: F.extrabold, fontSize: size, letterSpacing: -0.6, color: light ? C.white : C.ink }}>
         TruePas
