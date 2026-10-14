@@ -308,7 +308,7 @@ function YearStats({
   const guests = done.reduce((n, b) => n + b.guests, 0);
   const stats: { v: string; k: string }[] = fresh
     ? [
-        { v: readiness.faceEnrolled ? '✓' : '—', k: 'Face ID' },
+        { v: readiness.faceEnrolled ? '✓' : '✗', k: 'Face linked' },
         { v: String(readiness.ids), k: readiness.ids === 1 ? 'ID' : 'IDs' },
         { v: String(readiness.travellers), k: readiness.travellers === 1 ? 'Traveller' : 'Travellers' },
         { v: '0', k: 'Check-ins' },
