@@ -2,11 +2,10 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
     Camera,
-    ChevronDown,
-    ChevronRight,
+    Eye,
+    EyeOff,
     FileText,
     ScanLine,
-    ShieldCheck,
     Trash2,
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
@@ -66,8 +65,8 @@ export default function DocumentDetailScreen() {
   const [scanImageUri, setScanImageUri] = useState<string | null>(null);
   const [localChecked, setLocalChecked] = useState(false);
   const [isFlipped, setIsFlipped] = useState(false);
-  // Sensitive extracted fields stay hidden until asked for.
-  const [showExtracted, setShowExtracted] = useState(false);
+  // Date of birth stays masked until asked for.
+  const [showDob, setShowDob] = useState(false);
 
   // Local copy of the capture (keyed by docId, saved at scan time): Regula's
   // cropped document, shown first. The server's front is the full camera
@@ -199,6 +198,10 @@ export default function DocumentDetailScreen() {
             const pct = matchPct(d.matchScore);
             const expires = d.expiresAt ? d.expiresAt.split('T')[0] : null;
             const isLicense = d.type === 'drivingLicense';
+            // A licence names its issuing state, other documents a nationality;
+            // fall back to the other when only that one was read.
+            const issuer = (isLicense ? d.issuingState || d.nationality : d.nationality || d.issuingState) || null;
+            const issuerLabel = isLicense && d.issuingState ? 'Issuing state' : d.nationality ? 'Nationality' : 'Issuing state';
             const badge = statusBadge(d.status);
             return (
               <>
@@ -267,40 +270,28 @@ export default function DocumentDetailScreen() {
                   />
                 )}
 
+                {/* One card, only rows with a value. Status sits on the card
+                    above, the match score in its ring, and the source is
+                    internal, so none of them repeat here. */}
                 <Group title="Details">
-                  <ListRow title="Holder" value={d.extractedName ?? '—'} chevron={false} />
-                  <ListRow title="Number" value={displayDocNumber(d.number) || '—'} chevron={false} />
-                  <ListRow title="Status" chevron={false} trailing={<Badge label={badge.label} tone={badge.tone} icon={badge.icon} dot={badge.dot} />} />
-                  <ListRow title="Added" value={prettyDate(d.addedAt)} chevron={false} />
-                  {d.verifiedAt ? <ListRow title="Verified on" value={localDay(d.verifiedAt)} chevron={false} /> : null}
-                  <ListRow title="Expires" value={prettyDate(expires)} chevron={false} />
-                  <ListRow title="Match" value={pct != null ? `${pct}%` : '—'} chevron={false} />
-                  <ListRow
-                    title="Source"
-                    value={d.source ? d.source.replace(/^\w/, (c) => c.toUpperCase()) : '—'}
-                    chevron={false}
-                  />
-                </Group>
-
-                {/* Selective disclosure — extracted fields behind a tap */}
-                <View style={{ gap: 10 }}>
-                  <Group title="Extracted fields">
+                  {d.extractedName ? <ListRow title="Holder" value={d.extractedName} chevron={false} /> : null}
+                  {displayDocNumber(d.number) ? <ListRow title="Number" value={displayDocNumber(d.number)} chevron={false} /> : null}
+                  {d.extractedDob ? (
                     <ListRow
-                      icon={ShieldCheck}
-                      tone="sky"
-                      title={showExtracted ? 'Hide extracted fields' : 'View extracted fields'}
-                      sub="Date of birth, nationality, issuing state"
-                      onPress={() => setShowExtracted((e) => !e)}
-                      trailing={showExtracted ? <ChevronDown size={18} color={C.ink4} /> : <ChevronRight size={18} color={C.ink4} />}
+                      title="Date of birth"
+                      value={showDob ? prettyDate(d.extractedDob) : `•• ••• ${d.extractedDob.slice(0, 4)}`}
+                      onPress={() => setShowDob((v) => !v)}
+                      trailing={showDob ? <EyeOff size={18} color={C.ink4} /> : <Eye size={18} color={C.ink4} />}
                     />
-                    {showExtracted ? <ListRow title="Date of birth" value={prettyDate(d.extractedDob)} chevron={false} /> : null}
-                    {showExtracted ? <ListRow title="Nationality" value={d.nationality ?? '—'} chevron={false} /> : null}
-                    {showExtracted ? <ListRow title="Issuing state" value={d.issuingState ?? '—'} chevron={false} /> : null}
-                  </Group>
-                  <Txt v="small" color={C.ink4} style={{ marginLeft: 4 }}>
-                    Sensitive fields stay hidden until needed.
-                  </Txt>
-                </View>
+                  ) : null}
+                  {issuer ? <ListRow title={issuerLabel} value={issuer} chevron={false} /> : null}
+                  {expires ? <ListRow title="Expires" value={prettyDate(expires)} chevron={false} /> : null}
+                  {d.verifiedAt ? (
+                    <ListRow title="Verified on" value={localDay(d.verifiedAt)} chevron={false} />
+                  ) : (
+                    <ListRow title="Added" value={prettyDate(d.addedAt)} chevron={false} />
+                  )}
+                </Group>
 
                 <Card pad={0} style={{ paddingHorizontal: 16 }}>
                   <ListRow
