@@ -216,9 +216,14 @@ function IdentityStrengthCard({
   // Only identity steps belong here — 2-step sign-in, devices and password
   // raise the security score (Security screen), not identity strength.
   const identityTip = server?.suggestions.find((x) => IDENTITY_SUGGESTIONS.has(String(x.id)));
+  // The score needs one verified document, so "excellent" next to "1 of 3
+  // verified" read as a contradiction: name the documents still open.
+  const open = total - verifiedDocs;
   const sub =
     score >= 90
-      ? 'Your identity strength is excellent'
+      ? open > 0
+        ? `${open} document${open === 1 ? ' needs' : 's need'} attention`
+        : 'Your identity strength is excellent'
       : identityTip
         ? identityTip.title
         : s

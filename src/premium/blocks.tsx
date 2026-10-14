@@ -43,10 +43,29 @@ export function Logo({ size = 22, color = C.sky }: { size?: number; color?: stri
   );
 }
 
-export function Wordmark({ light, size = 20 }: { light?: boolean; size?: number }) {
+/** `ring`: the mark sits in a glass circle (the identity card's style for
+ *  framed things, like the photo and family initials). */
+export function Wordmark({ light, size = 20, ring }: { light?: boolean; size?: number; ring?: boolean }) {
+  const mark = <Logo size={size * 0.9} color={light ? C.white : C.sky} />;
   return (
     <Row gap={8}>
-      <Logo size={size * 0.9} color={light ? C.white : C.sky} />
+      {ring ? (
+        <View
+          style={{
+            width: size * 1.8,
+            height: size * 1.8,
+            borderRadius: size * 0.9,
+            backgroundColor: "rgba(255,255,255,0.14)",
+            borderWidth: 1,
+            borderColor: "rgba(255,255,255,0.28)",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+          {mark}
+        </View>
+      ) : (
+        mark
+      )}
       <Text style={{ fontFamily: F.extrabold, fontSize: size, letterSpacing: -0.6, color: light ? C.white : C.ink }}>
         TruePas
       </Text>
@@ -124,7 +143,7 @@ export function IdentityCard({
         <Guilloche size={420} style={{ right: -210, bottom: -230 }} />
 
         <Row between>
-          <Wordmark light size={17} />
+          <Wordmark light ring size={17} />
           <Badge label={statusLabel ?? (verified ? "Verified" : "Setup pending")} tone={verified ? "glass" : "amber"} icon={verified ? ScanFace : undefined} dot={!verified} />
         </Row>
 
