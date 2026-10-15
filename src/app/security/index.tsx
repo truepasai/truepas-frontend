@@ -56,7 +56,6 @@ const SUGGESTION_ICON: Record<string, LucideIcon> = {
   enable_2fa: ShieldCheck,
   renew_document: FileClock,
   change_password: Lock,
-  review_sessions: Smartphone,
 };
 
 /** Where each server suggestion is fixed (§10.2). null → shown without a link. */
@@ -75,8 +74,6 @@ function suggestionHref(s: Suggestion): unknown {
     case 'change_password':
       // Same PIN gate as the "Change password" row.
       return { pathname: '/security/confirm-pin', params: { next: '/security/change-password' } };
-    case 'review_sessions':
-      return '/security/devices';
     default:
       return null;
   }
@@ -130,7 +127,9 @@ export default function SecurityScreen() {
     void sessions.refetch();
   };
 
-  const suggestions = score.data?.suggestions ?? [];
+  // review_sessions earns no points and duplicates the "Signed-in devices"
+  // row below, so it doesn't belong under "Improve your score".
+  const suggestions = (score.data?.suggestions ?? []).filter((s) => s.id !== 'review_sessions');
 
   return (
     <Screen

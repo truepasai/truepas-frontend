@@ -343,8 +343,11 @@ export const realApi = {
     return data;
   },
   getSessions: async (): Promise<AuthSession[]> => {
-    const { data } = await apiClient.get<AuthSession[]>('/auth/sessions');
-    return Array.isArray(data) ? data : [];
+    // The BFF passes account-service's { sessions: [...] } through; a bare
+    // array is the older contract (§4.3).
+    const { data } = await apiClient.get<AuthSession[] | { sessions?: AuthSession[] }>('/auth/sessions');
+    if (Array.isArray(data)) return data;
+    return Array.isArray(data?.sessions) ? data.sessions : [];
   },
   revokeSession: async (id: string): Promise<RevokeSessionsResponse> => {
     const { data } = await apiClient.delete<RevokeSessionsResponse>(`/auth/sessions/${id}`);
