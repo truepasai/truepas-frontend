@@ -237,9 +237,11 @@ function IdentityStrengthCard({
         <Txt v="bodyStrong">{title}</Txt>
         <Txt v="small">{sub}</Txt>
       </View>
-      <View style={{ alignItems: 'flex-end' }} accessible accessibilityLabel={`Identity strength ${score} out of 100`}>
-        <Text style={{ fontFamily: F.extrabold, fontSize: 22, color }}>{score}</Text>
-        <Text style={{ fontFamily: F.medium, fontSize: 10.5, color: C.ink4, marginTop: -2 }}>/ 100</Text>
+      {/* Shown as readiness for check-in: "100% ready" reads at a glance and
+          isn't mistaken for a document match percentage. */}
+      <View style={{ alignItems: 'flex-end' }} accessible accessibilityLabel={`${score}% ready`}>
+        <Text style={{ fontFamily: F.extrabold, fontSize: 22, color }}>{score}%</Text>
+        <Text style={{ fontFamily: F.medium, fontSize: 10.5, color: C.ink4, marginTop: -2 }}>ready</Text>
       </View>
     </Card>
   );
