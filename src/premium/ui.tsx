@@ -138,7 +138,9 @@ export function Screen({
   footer?: ReactNode;
   contentStyle?: StyleProp<ViewStyle>;
   header?: ReactNode;
-  /** Forms: lift content + footer above the software keyboard. */
+  /** Forms: lift content + footer above the software keyboard. Android needs
+   *  "height" too: edge-to-edge doesn't resize the window, so without it the
+   *  keyboard covers the footer button (AuthScreen does the same). */
   keyboard?: boolean;
   refreshing?: boolean;
   onRefresh?: () => void;
@@ -149,7 +151,7 @@ export function Screen({
   const bottomInset = footer == null && !edges.includes("bottom") ? insets.bottom : 0;
   return (
     <View style={{ flex: 1, backgroundColor: bg }}>
-      <KeyboardAvoidingView style={{ flex: 1 }} enabled={!!keyboard} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} enabled={!!keyboard} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <SafeAreaView edges={edges} style={{ flex: 1 }}>
         {header}
         {scroll ? (
@@ -543,7 +545,7 @@ export function ListRow({
       <View style={{ flexDirection: "row", alignItems: "center", gap: 14, paddingVertical: 14 }}>
         {icon && <Tile icon={icon} tone={danger ? "red" : tone ?? "neutral"} size={40} />}
         <View style={{ flex: 1, gap: 2 }}>
-          <Txt v="bodyStrong" color={danger ? C.redInk : C.ink} lines={1}>
+          <Txt v="bodyStrong" color={danger ? C.redInk : C.ink} lines={2}>
             {title}
           </Txt>
           {sub != null && (
@@ -601,14 +603,17 @@ export function Badge({ label, tone = "green", icon: Icon, dot }: { label: strin
         gap: 5,
         backgroundColor: bg,
         paddingHorizontal: 10,
-        height: 26,
+        minHeight: 26,
+        paddingVertical: 4,
         borderRadius: R.full,
         alignSelf: "flex-start",
       }}
     >
       {dot && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: fg }} />}
       {Icon && <Icon size={13} color={fg} strokeWidth={2.6} />}
-      <Text style={{ fontFamily: F.bold, fontSize: 12, color: fg, letterSpacing: 0.1 }}>{label}</Text>
+      {/* Shrinks and wraps when the parent is narrower than the label (a
+          family card on a 360dp phone) instead of being clipped. */}
+      <Text style={{ flexShrink: 1, fontFamily: F.bold, fontSize: 12, color: fg, letterSpacing: 0.1 }}>{label}</Text>
     </View>
   );
 }
