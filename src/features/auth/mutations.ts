@@ -77,8 +77,14 @@ export function useChangePassword() {
 }
 
 export function useChangePin() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (payload: ChangePinRequest) => api.changePin(payload),
+    // pinChangedAt (Security "Changed …" line, Home "PIN changed" activity).
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['account', 'me'] });
+      void queryClient.invalidateQueries({ queryKey: ['account', 'activity'] });
+    },
   });
 }
 

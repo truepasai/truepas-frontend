@@ -5,11 +5,13 @@
  * "Download my data" export. Screens use these hooks; nothing here renders.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
 
 import { api } from '@/api';
+import { normalizeActivity } from '@/api/endpoints';
 import { profileUpdated } from '@/features/auth/slice';
 import { useAppDispatch } from '@/store';
-import type { AppPreferences, TwoFactorMethod } from '@/types/domain';
+import type { ActivityItem, AppPreferences, TwoFactorMethod } from '@/types/domain';
 
 export const accountKeys = {
   me: ['account', 'me'] as const,
@@ -101,9 +103,30 @@ export function useDisableTwoFactor() {
 
 // ── Home / security data ──────────────────────────────────────────────
 
-/** GET /user/me/activity — newest first, max 20. */
+/** GET /user/me/activity — newest first, max 20. The feed has no PIN entry
+ *  yet (BUG037: it derives "Password changed" but not "PIN changed"), so one
+ *  is added from /user/me pinChangedAt until the server sends `pin_changed`. */
 export function useAccountActivity() {
-  return useQuery({ queryKey: accountKeys.activity, queryFn: () => api.getAccountActivity() });
+  const feed = useQuery({ queryKey: accountKeys.activity, queryFn: () => api.getAccountActivity() });
+  const pinChangedAt = useMe().data?.pinChangedAt ?? null;
+  const data = useMemo(() => withPinChange(feed.data, pinChangedAt), [feed.data, pinChangedAt]);
+  return { ...feed, data };
+}
+
+/** Adds "PIN changed" (from /user/me) to an activity list that lacks it. */
+export function withPinChange(items: ActivityItem[] | undefined, pinChangedAt: string | null): ActivityItem[] | undefined {
+  if (!items || !pinChangedAt || items.some((a) => a.type === 'pin_changed')) return items;
+  const entry = normalizeActivity({
+    id: 'pin-changed',
+    type: 'pin_changed',
+    title: 'PIN changed',
+    tone: 'neutral',
+    occurredAt: pinChangedAt,
+  });
+  // Newest first: before the first entry that is older.
+  const at = items.findIndex((a) => a.occurredAt != null && a.occurredAt < pinChangedAt);
+  const merged = at === -1 ? [...items, entry] : [...items.slice(0, at), entry, ...items.slice(at)];
+  return merged.slice(0, 20);
 }
 
 /** Server score — use instead of computing one on the phone. */

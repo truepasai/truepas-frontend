@@ -51,7 +51,8 @@ export type ActivityType =
   | 'family_member_added'
   | 'family_face_enrolled'
   | 'check_in'
-  | 'password_changed';
+  | 'password_changed'
+  | 'pin_changed';
 
 export interface ActivityRef {
   documentId?: string;

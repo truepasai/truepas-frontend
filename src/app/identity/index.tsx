@@ -13,6 +13,7 @@ import { BadgeCheck, FileText, Hourglass, ScanFace, ShieldCheck, UserRoundCheck 
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useMe, withPinChange } from '@/features/account/hooks';
 import { useDocuments } from '@/features/documents/hooks';
 import { useIdentitySummary } from '@/features/identity/hooks';
 import { useProfilePicture } from '@/features/profile/hooks';
@@ -31,6 +32,8 @@ export default function IdentityScreen() {
   const { url: avatarUri } = useProfilePicture();
   const { data: summary, isPending, isError, refetch, isRefetching } = useIdentitySummary();
   const documents = useDocuments();
+  // The summary's feed has no PIN entry yet (BUG037) — same fill as Home.
+  const pinChangedAt = useMe().data?.pinChangedAt ?? null;
   const insets = useSafeAreaInsets();
   // Navy pass header: light status bar until the white pass card (below the
   // 60pt TopBar + 12pt gap) scrolls up under it.
@@ -76,6 +79,7 @@ export default function IdentityScreen() {
 
   const docs = documents.data ?? [];
   const verifiedDocs = docs.filter((d) => d.status === 'verified').length;
+  const activity = withPinChange(summary.activity, pinChangedAt) ?? [];
 
   return (
     <View style={{ flex: 1, backgroundColor: C.canvas }}>
@@ -199,8 +203,8 @@ export default function IdentityScreen() {
               Recent activity
             </Txt>
             <Card pad={0} style={{ paddingHorizontal: 16 }}>
-              {summary.activity.length > 0 ? (
-                summary.activity.map((item, i) => (
+              {activity.length > 0 ? (
+                activity.map((item, i) => (
                   <View key={item.id}>
                     {i > 0 && <Divider inset={22} />}
                     <ActivityRow item={item} />

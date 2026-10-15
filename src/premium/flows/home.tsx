@@ -25,6 +25,7 @@ import {
   FileText,
   Heart,
   Info,
+  KeyRound,
   Lock,
   LogOut,
   type LucideIcon,
@@ -958,6 +959,7 @@ const FEED_TYPE: Record<ActivityType, { icon: LucideIcon; badge: string }> = {
   family_face_enrolled: { icon: ScanFace, badge: 'Face enrolled' },
   check_in: { icon: MapPin, badge: 'Checked in' },
   password_changed: { icon: Lock, badge: 'Changed' },
+  pin_changed: { icon: KeyRound, badge: 'Changed' },
 };
 
 const FEED_TONE: Record<ActivityItem['tone'], TileTone & BadgeTone> = {
@@ -972,7 +974,7 @@ export function activityHref(a: Pick<ActivityItem, 'ref' | 'type'>): string {
   if (a.ref?.documentId) return `/document/${a.ref.documentId}`;
   if (a.ref?.personId) return `/family/${a.ref.personId}`;
   if (a.ref?.bookingId) return `/booking/${a.ref.bookingId}`;
-  if (a.type === 'password_changed') return '/security';
+  if (a.type === 'password_changed' || a.type === 'pin_changed') return '/security';
   return '/identity';
 }
 

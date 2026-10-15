@@ -52,6 +52,7 @@ const EVENT_STYLE: Record<ActivityType, { icon: LucideIcon; tone: TileTone }> = 
   family_member_added: { icon: UserPlus, tone: 'sky' },
   check_in: { icon: MapPin, tone: 'navy' },
   password_changed: { icon: KeyRound, tone: 'neutral' },
+  pin_changed: { icon: KeyRound, tone: 'neutral' },
 };
 
 /** Server tone wins when it signals something (success/warning/error). */

@@ -477,6 +477,7 @@ export const mockApi = {
       return fail('New PIN must be different from your current PIN');
     }
     userPin = payload.newPin;
+    user = { ...user, pinChangedAt: new Date().toISOString() };
     return respond({ ok: true, message: 'PIN changed' });
   },
   verifyPin: (pin: string): Promise<VerifyPinResponse> => {
