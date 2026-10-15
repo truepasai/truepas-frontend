@@ -10,7 +10,13 @@ import { documentKeys } from '@/features/documents/hooks';
 import { notificationKeys } from '@/features/notifications/hooks';
 import { clearDocumentImages } from '@/services/documentImageStore';
 import { flowGuards } from '@/services/flowGuards';
-import { deleteMemberProfileImage, getMemberProfileImage, saveMemberFacePhoto } from '@/services/profileImageStore';
+import {
+  deleteMemberProfileImage,
+  getMemberProfileImage,
+  isMemberPhotoPicked,
+  markMemberPhotoPicked,
+  saveMemberFacePhoto,
+} from '@/services/profileImageStore';
 import { hasReauthToken } from '@/services/reauth';
 import { ageFromDob } from '@/utils/age';
 import type { AddFamilyMemberRequest, FamilyAgeBand, FamilyMember, IdentityDocument } from '@/types/domain';
@@ -213,6 +219,7 @@ export function useSetMemberPhoto(personId: string) {
       const uri = result.canceled ? null : result.assets[0]?.uri;
       if (!uri) return 'cancelled';
       const small = await saveMemberFacePhoto(personId, uri);
+      await markMemberPhotoPicked(personId).catch(() => {});
       await queryClient.invalidateQueries({ queryKey: memberPhotoKey(personId) });
       try {
         await uploadMemberPhoto(queryClient, personId, small);
@@ -231,10 +238,12 @@ export function useSetMemberPhoto(personId: string) {
 
 /** Save the enrolment capture as the member's avatar (480px, on this phone)
  *  and upload it to their profile in the background. Best effort: a failure
- *  here must never fail or delay the enrolment itself. */
+ *  here must never fail or delay the enrolment itself. A photo the user chose
+ *  themselves (camera or gallery) is kept: a face scan never replaces it. */
 export function useRememberMemberPhoto() {
   const queryClient = useQueryClient();
   return async (personId: string, captureUri: string) => {
+    if (await isMemberPhotoPicked(personId).catch(() => false)) return;
     let small: string;
     try {
       small = await saveMemberFacePhoto(personId, captureUri);

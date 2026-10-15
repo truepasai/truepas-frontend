@@ -90,11 +90,35 @@ export async function saveMemberFacePhoto(personId: string, captureUri: string):
   return saveMemberProfileImage(personId, small.uri);
 }
 
+// A member photo the user chose (camera or gallery) is marked so a later
+// face scan doesn't replace it. Holds no image, only the fact; it's kept on
+// logout so the choice survives signing back in on this phone.
+function pickedMarker(personId: string): File {
+  return new File(Paths.document, `member-${personId}-picked`);
+}
+
+/** Remember that the user chose this member's photo themselves. */
+export async function markMemberPhotoPicked(personId: string): Promise<void> {
+  if (NO_FS) return;
+  const marker = pickedMarker(personId);
+  if (marker.exists) return;
+  marker.create();
+  marker.write('1');
+}
+
+/** True when the member's photo was chosen by the user on this phone. */
+export async function isMemberPhotoPicked(personId: string): Promise<boolean> {
+  if (NO_FS) return false;
+  return pickedMarker(personId).exists;
+}
+
 /** Remove a family member's locally stored picture (member removed). */
 export async function deleteMemberProfileImage(personId: string): Promise<void> {
   if (NO_FS) return;
   const file = memberFile(personId);
   if (file.exists) file.delete();
+  const marker = pickedMarker(personId);
+  if (marker.exists) marker.delete();
 }
 
 /** Get a family member's locally stored profile picture URI, or null. */
