@@ -45,7 +45,8 @@ export default function DeleteSuccessScreen() {
     flowGuards.consume('account:deleted');
     queryClient.clear();
     void clearAllDocumentImages();
-    void clearAllProfileImages();
+    // Everything, un-uploaded member photos included: the account is gone.
+    void clearAllProfileImages({ everything: true });
     dispatch(sessionEnded());
   }, [queryClient, dispatch, allowed]);
 

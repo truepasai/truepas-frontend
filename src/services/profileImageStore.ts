@@ -72,7 +72,28 @@ export async function saveMemberProfileImage(personId: string, imageUri: string)
   if (dest.exists) dest.delete();
   const base64 = await src.base64();
   dest.write(base64, { encoding: EncodingType.Base64 });
+  // Not on their profile yet: kept through a logout until it is uploaded.
+  const marker = unsyncedMarker(personId);
+  if (!marker.exists) {
+    marker.create();
+    marker.write('1');
+  }
   return dest.uri;
+}
+
+// A member photo saved here but not yet uploaded to their profile. Logout
+// keeps these (useSyncMemberPhotos retries the upload on the next sign-in)
+// instead of losing a photo that exists nowhere else. Member ids belong to
+// one account, so another account on this phone never shows or uploads them.
+function unsyncedMarker(personId: string): File {
+  return new File(Paths.document, `member-${personId}-unsynced`);
+}
+
+/** The member's photo reached their profile: a logout may now drop the phone copy. */
+export async function markMemberPhotoSynced(personId: string): Promise<void> {
+  if (NO_FS) return;
+  const marker = unsyncedMarker(personId);
+  if (marker.exists) marker.delete();
 }
 
 /**
@@ -119,6 +140,8 @@ export async function deleteMemberProfileImage(personId: string): Promise<void> 
   if (file.exists) file.delete();
   const marker = pickedMarker(personId);
   if (marker.exists) marker.delete();
+  const unsynced = unsyncedMarker(personId);
+  if (unsynced.exists) unsynced.delete();
 }
 
 /** Get a family member's locally stored profile picture URI, or null. */
@@ -133,17 +156,22 @@ export async function getMemberProfileImage(personId: string): Promise<string | 
  * member-<personId>-image.jpg files — on logout/session teardown. Without
  * this the next account on a shared device would see the previous user's
  * photos (the avatar filename is fixed, not user-scoped).
+ *
+ * Member photos that never reached the server are kept (see unsyncedMarker):
+ * wiping them lost a gallery photo whose upload had failed. `everything`
+ * (account deletion) drops those too.
  */
-export async function clearAllProfileImages(): Promise<void> {
+export async function clearAllProfileImages({ everything = false }: { everything?: boolean } = {}): Promise<void> {
   if (NO_FS) return;
   await clearLocalProfileImage();
   const entries = new Directory(Paths.document).list();
+  const names = new Set(entries.map((e) => e.name));
   for (const entry of entries) {
-    if (
-      entry instanceof File &&
-      entry.name.startsWith('member-') &&
-      entry.name.endsWith('-image.jpg')
-    ) {
+    if (!(entry instanceof File) || !entry.name.startsWith('member-')) continue;
+    if (entry.name.endsWith('-image.jpg')) {
+      const unsynced = entry.name.replace(/-image\.jpg$/, '-unsynced');
+      if (everything || !names.has(unsynced)) entry.delete();
+    } else if (everything && entry.name.endsWith('-unsynced')) {
       entry.delete();
     }
   }

@@ -10,6 +10,7 @@ import { Provider } from 'react-redux';
 import { SessionExpiredError, setOnSessionExpired } from '@/api/client';
 import { FieldLabelStyleProvider, ToastProvider } from '@/components/composite';
 import { sessionEnded } from '@/features/auth/slice';
+import { resetMemberPhotoSync } from '@/features/family/hooks';
 import { clearAllProfileImages } from '@/services/profileImageStore';
 import { store } from '@/store';
 import { AppStatusBar } from '@/premium/statusBar';
@@ -60,6 +61,7 @@ setOnSessionExpired(() => {
   // document scans are kept — the backend can't return them, so wiping
   // here lost every passport photo on token expiry (see useLogoutFlow).
   void clearAllProfileImages().catch(() => {});
+  resetMemberPhotoSync();
   if (router.canDismiss()) {
     router.dismissAll();
   }

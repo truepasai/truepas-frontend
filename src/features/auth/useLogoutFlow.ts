@@ -4,6 +4,7 @@ import { useCallback } from 'react';
 
 import { useLogout } from '@/features/auth/mutations';
 import { sessionEnded } from '@/features/auth/slice';
+import { resetMemberPhotoSync } from '@/features/family/hooks';
 import { clearAllProfileImages } from '@/services/profileImageStore';
 import { secureStorage } from '@/services/secureStorage';
 import { useAppDispatch } from '@/store';
@@ -54,6 +55,7 @@ export function useLogoutFlow() {
         }
       }
       await clearAllProfileImages().catch(() => {});
+      resetMemberPhotoSync();
       dispatch(sessionEnded());
       // Reset the whole stack, as the session-expired handler does. Login is
       // never in the stack, so dismissTo only swapped the top screen: the

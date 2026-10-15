@@ -15,6 +15,7 @@ import {
   getMemberProfileImage,
   isMemberPhotoPicked,
   markMemberPhotoPicked,
+  markMemberPhotoSynced,
   saveMemberFacePhoto,
 } from '@/services/profileImageStore';
 import { hasReauthToken } from '@/services/reauth';
@@ -187,6 +188,7 @@ export function useMembersWithoutPhoto(members: FamilyMember[]): FamilyMember[] 
  *  family reads so profileImageUrl comes back. Throws on failure. */
 async function uploadMemberPhoto(queryClient: QueryClient, personId: string, uri: string): Promise<void> {
   await api.uploadProfilePicture(uri, personId);
+  await markMemberPhotoSynced(personId).catch(() => {});
   await queryClient.invalidateQueries({ queryKey: familyKeys.all });
 }
 
@@ -260,6 +262,11 @@ export function useRememberMemberPhoto() {
 /** Members whose phone-only photo was already retried this app session. */
 const photoSyncTried = new Set<string>();
 
+/** Signing out ends the "session": the next sign-in retries kept photos. */
+export function resetMemberPhotoSync(): void {
+  photoSyncTried.clear();
+}
+
 /**
  * Uploads member photos that exist only on this phone — their upload failed
  * earlier (offline, or the S3 403 before the upload fix) — so they survive
@@ -278,6 +285,7 @@ export function useSyncMemberPhotos(members: FamilyMember[] | undefined) {
         if (!local) continue;
         try {
           await api.uploadProfilePicture(local, m.id);
+          await markMemberPhotoSynced(m.id).catch(() => {});
           uploaded += 1;
           console.log('[MemberPhoto] uploaded phone-only photo', m.id.slice(0, 8));
         } catch (e) {
