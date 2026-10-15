@@ -6,14 +6,14 @@
  * Upcoming first and past visits by month, drilling into booking detail.
  * "Add reservation" (header + empty state) opens /booking/new. The year
  * card shows GET /user/me/stats; while the server reports no check-ins
- * (zeros on dev until check-in events flow) it shows what the first visit
- * needs and what's already in place, and the list shows how a check-in
- * works for the selected category.
+ * (zeros on dev until check-in events flow) it shows what's in place for
+ * the first visit, and the list shows how a check-in works for the
+ * selected category.
  */
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { CalendarPlus, Check, IdCard, type LucideIcon, Plus, ScanFace, Users } from 'lucide-react-native';
+import { CalendarPlus, Check, Plus } from 'lucide-react-native';
 import { useCallback, useRef, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,7 +26,7 @@ import { Guilloche, TAB_BAR_SPACE } from '@/premium/blocks';
 import { BookingRow, bookingKind, bookingWhen, FirstCheckInRow, fmtMonthLabel, fmtSeconds, TabTitle, yearOf } from '@/premium/flows/home';
 import { IMG, type ImgKey } from '@/premium/images';
 import { Async, SkeletonList } from '@/premium/kit';
-import { C, DESCENDERS, F, G, R } from '@/premium/theme';
+import { C, F, G, R } from '@/premium/theme';
 import { Badge, Button, Card, Chip, Divider, IconCircle, Press, Row, Txt } from '@/premium/ui';
 import { useAppSelector } from '@/store';
 import type { Booking, UserStats } from '@/types/domain';
@@ -295,12 +295,11 @@ function GuideRow({ step, n }: { step: GuideStep; n: number }) {
 
 type Readiness = { faceEnrolled: boolean; ids: number; travellers: number };
 
-/** The year in check-ins from GET /user/me/stats (check-ins, cities, the
+/** Year-in-numbers header from GET /user/me/stats (check-ins, cities, the
  *  average kiosk time, minutes saved). Until the server has it (loading or
  *  failed) the numbers come from the bookings list. Before the year's first
- *  check-in it says what that first visit takes and what the user already
- *  brings to it (face, IDs, travellers); a missing piece is tappable and
- *  opens its setup. The stats it will track show as placeholders. */
+ *  check-in it shows what the user already brings to it (face, IDs,
+ *  travellers) in the same footprint; a missing piece opens its setup. */
 function YearStats({
   year,
   list,
@@ -319,123 +318,80 @@ function YearStats({
   const fresh = total === 0;
   const places = new Set(done.map((b) => (b.location ?? '').trim().toLowerCase()).filter(Boolean)).size;
   const guests = done.reduce((n, b) => n + b.guests, 0);
+  const ready = readiness.faceEnrolled && readiness.ids > 0;
+  const stats: { v: string; k: string }[] = server
+    ? [
+        { v: String(server.checkIns), k: server.checkIns === 1 ? 'Check-in' : 'Check-ins' },
+        { v: String(server.cities), k: server.cities === 1 ? 'City' : 'Cities' },
+        { v: server.avgCheckInMs != null ? fmtSeconds(server.avgCheckInMs) : '—', k: 'Avg. time' },
+        { v: `${server.minutesSaved} min`, k: 'Saved' },
+      ]
+    : [
+        { v: String(done.length), k: done.length === 1 ? 'Check-in' : 'Check-ins' },
+        { v: String(places), k: places === 1 ? 'Place' : 'Places' },
+        { v: String(guests), k: 'Guests' },
+        { v: '—', k: 'Avg. time' },
+      ];
 
   return (
-    <View style={{ borderRadius: R.xl, overflow: 'hidden', padding: 20, gap: 16 }}>
+    <View style={{ borderRadius: R.xl, overflow: 'hidden', padding: 20, gap: fresh ? 14 : 18 }}>
       <LinearGradient colors={G.hero} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
-      <Guilloche size={300} opacity={0.07} style={{ right: -130, top: -150 }} />
-
+      <Guilloche size={260} opacity={0.07} style={{ right: -120, top: -130 }} />
       <Row between>
         <Txt v="micro" color={C.skyLight}>
-          {`Your ${year} in check-ins`}
+          {fresh ? `Your ${year} starts here` : `Your ${year} so far`}
         </Txt>
-        <Text style={{ fontFamily: F.mono, fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>{`${total} so far`}</Text>
       </Row>
-
       {fresh ? (
         <>
-          <View>
-            <Text style={{ fontFamily: F.extrabold, fontSize: 26, lineHeight: 31, letterSpacing: -0.8, color: C.white }}>
-              Your first check-in is
-            </Text>
-            <Text style={{ fontFamily: F.serifItalic, fontSize: 34, lineHeight: 36, color: C.skyLight, ...DESCENDERS }}>
-              one look away.
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          <Text style={{ fontFamily: F.bold, fontSize: 20, letterSpacing: -0.5, color: C.white, marginTop: -4 }} numberOfLines={1}>
+            {ready ? 'Ready for your ' : 'Before your '}
+            <Text style={{ fontFamily: F.serifItalic, fontSize: 24, letterSpacing: 0, color: C.skyLight }}>first check-in</Text>
+          </Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
             <ReadyPill
-              icon={ScanFace}
               done={readiness.faceEnrolled}
-              label={readiness.faceEnrolled ? 'Face linked' : 'Link your face'}
+              label={readiness.faceEnrolled ? 'Face linked' : 'Link face'}
               onPress={() => onOpen('/face-update/pin')}
             />
             <ReadyPill
-              icon={IdCard}
               done={readiness.ids > 0}
-              label={readiness.ids > 0 ? `${readiness.ids} ${readiness.ids === 1 ? 'ID' : 'IDs'} verified` : 'Add your ID'}
+              label={readiness.ids > 0 ? `${readiness.ids} ${readiness.ids === 1 ? 'ID' : 'IDs'}` : 'Add ID'}
               onPress={() => onOpen('/document/select-type')}
             />
             <ReadyPill
-              icon={Users}
               done={readiness.travellers > 1}
               label={readiness.travellers > 1 ? `${readiness.travellers} travellers` : 'Add family'}
               onPress={() => onOpen('/family/add')}
             />
           </View>
-          <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
-          <StatRow
-            ghost
-            stats={[
-              { v: '—', k: 'Cities' },
-              { v: '—', k: 'Avg. time' },
-              { v: '—', k: 'Time saved' },
-            ]}
-          />
-          <Text style={{ fontFamily: F.medium, fontSize: 12.5, color: 'rgba(255,255,255,0.55)', marginTop: -6 }}>
-            These fill in after every visit.
-          </Text>
         </>
       ) : (
-        <>
-          <View>
-            <Text style={{ fontFamily: F.extrabold, fontSize: 30, lineHeight: 35, letterSpacing: -0.9, color: C.white }}>
-              {`${total} ${total === 1 ? 'check-in' : 'check-ins'}`}
-            </Text>
-            <Text style={{ fontFamily: F.serifItalic, fontSize: 24, lineHeight: 28, color: C.skyLight, ...DESCENDERS }}>
-              {server && server.minutesSaved > 0 ? `and ${server.minutesSaved} min of queues skipped.` : 'and not a single queue.'}
-            </Text>
-          </View>
-          <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
-          <StatRow
-            stats={
-              server
-                ? [
-                    { v: String(server.cities), k: server.cities === 1 ? 'City' : 'Cities' },
-                    { v: server.avgCheckInMs != null ? fmtSeconds(server.avgCheckInMs) : '—', k: 'Avg. time' },
-                    { v: `${server.minutesSaved} min`, k: 'Time saved' },
-                  ]
-                : [
-                    { v: String(places), k: places === 1 ? 'Place' : 'Places' },
-                    { v: String(guests), k: guests === 1 ? 'Guest' : 'Guests' },
-                    { v: '—', k: 'Avg. time' },
-                  ]
-            }
-          />
-        </>
+        <Row between>
+          {stats.map((s) => (
+            <View key={s.k} style={{ gap: 2 }}>
+              <Text style={{ fontFamily: F.extrabold, fontSize: 26, letterSpacing: -0.8, color: C.white }}>{s.v}</Text>
+              <Text style={{ fontFamily: F.medium, fontSize: 12, color: 'rgba(255,255,255,0.6)' }}>{s.k}</Text>
+            </View>
+          ))}
+        </Row>
       )}
     </View>
   );
 }
 
-function StatRow({ stats, ghost }: { stats: { v: string; k: string }[]; ghost?: boolean }) {
-  return (
-    <Row between align="flex-start">
-      {stats.map((s) => (
-        <View key={s.k} style={{ gap: 2, flex: 1 }}>
-          <Text style={{ fontFamily: F.extrabold, fontSize: 22, letterSpacing: -0.6, color: ghost ? 'rgba(255,255,255,0.32)' : C.white }}>
-            {s.v}
-          </Text>
-          <Text style={{ fontFamily: F.medium, fontSize: 12, color: 'rgba(255,255,255,0.6)' }} numberOfLines={1}>
-            {s.k}
-          </Text>
-        </View>
-      ))}
-    </Row>
-  );
-}
-
 /** What the user brings to a check-in. Done pieces are glass with a tick;
  *  a missing one is a dashed sky pill that opens its setup. */
-function ReadyPill({ icon: Icon, label, done, onPress }: { icon: LucideIcon; label: string; done: boolean; onPress: () => void }) {
+function ReadyPill({ label, done, onPress }: { label: string; done: boolean; onPress: () => void }) {
   const body = (
     <View
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 7,
-        height: 32,
-        paddingLeft: 8,
-        paddingRight: 12,
+        gap: 5,
+        height: 28,
+        paddingLeft: 6,
+        paddingRight: 10,
         borderRadius: R.full,
         borderWidth: 1,
         borderStyle: done ? 'solid' : 'dashed',
@@ -444,14 +400,13 @@ function ReadyPill({ icon: Icon, label, done, onPress }: { icon: LucideIcon; lab
       }}
     >
       {done ? (
-        <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: C.sky, alignItems: 'center', justifyContent: 'center' }}>
-          <Check size={11} color={C.white} strokeWidth={3.2} />
+        <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: C.sky, alignItems: 'center', justifyContent: 'center' }}>
+          <Check size={10} color={C.white} strokeWidth={3.2} />
         </View>
       ) : (
-        <Plus size={16} color={C.skyLight} strokeWidth={2.6} />
+        <Plus size={14} color={C.skyLight} strokeWidth={2.6} />
       )}
-      <Icon size={14} color={done ? 'rgba(255,255,255,0.7)' : C.skyLight} strokeWidth={2.2} />
-      <Text style={{ fontFamily: F.semibold, fontSize: 13, color: done ? C.white : C.skyLight }} numberOfLines={1}>
+      <Text style={{ fontFamily: F.semibold, fontSize: 12.5, color: done ? C.white : C.skyLight }} numberOfLines={1}>
         {label}
       </Text>
     </View>
