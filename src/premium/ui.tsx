@@ -584,7 +584,8 @@ export function Group({ children, title }: { children: ReactNode[] | ReactNode; 
 
 export type BadgeTone = "green" | "amber" | "sky" | "red" | "neutral" | "glass" | "navy";
 
-export function Badge({ label, tone = "green", icon: Icon, dot }: { label: string; tone?: BadgeTone; icon?: LucideIcon; dot?: boolean }) {
+/** `small`: tighter padding and type, for narrow spots (family portrait cards). */
+export function Badge({ label, tone = "green", icon: Icon, dot, small }: { label: string; tone?: BadgeTone; icon?: LucideIcon; dot?: boolean; small?: boolean }) {
   const map: Record<BadgeTone, [string, string]> = {
     green: [C.greenWash, C.greenInk],
     amber: [C.amberWash, C.amberInk],
@@ -602,7 +603,7 @@ export function Badge({ label, tone = "green", icon: Icon, dot }: { label: strin
         alignItems: "center",
         gap: 5,
         backgroundColor: bg,
-        paddingHorizontal: 10,
+        paddingHorizontal: small ? 8 : 10,
         minHeight: 26,
         paddingVertical: 4,
         borderRadius: R.full,
@@ -613,7 +614,7 @@ export function Badge({ label, tone = "green", icon: Icon, dot }: { label: strin
       {Icon && <Icon size={13} color={fg} strokeWidth={2.6} />}
       {/* Shrinks and wraps when the parent is narrower than the label (a
           family card on a 360dp phone) instead of being clipped. */}
-      <Text style={{ flexShrink: 1, fontFamily: F.bold, fontSize: 12, color: fg, letterSpacing: 0.1 }}>{label}</Text>
+      <Text style={{ flexShrink: 1, fontFamily: F.bold, fontSize: small ? 11.5 : 12, color: fg, letterSpacing: 0.1 }}>{label}</Text>
     </View>
   );
 }

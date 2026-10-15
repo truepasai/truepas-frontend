@@ -113,7 +113,7 @@ export function MemberPortrait({ member, onPress }: { member: FamilyMember; onPr
   const photoUri = useMemberPhoto(member.id, member.profileImageUrl);
   return (
     <Press onPress={onPress} label={member.name} role="button" style={[{ flex: 1, borderRadius: R.xl }, SH.md]}>
-      <View style={{ minHeight: 228, borderRadius: R.xl, overflow: 'hidden', padding: 14, justifyContent: 'flex-end', gap: 10 }}>
+      <View style={{ minHeight: 228, borderRadius: R.xl, overflow: 'hidden', padding: 12, justifyContent: 'flex-end', gap: 10 }}>
         {photoUri ? (
           <>
             <Image source={{ uri: photoUri }} style={StyleSheet.absoluteFill} contentFit="cover" />
@@ -150,9 +150,10 @@ export function MemberPortrait({ member, onPress }: { member: FamilyMember; onPr
             {member.relationship} · {member.age} yrs
           </Text>
           {/* Status under the name, not on top: on a photo card the top is
-              where the face is. */}
+              where the face is. Small and without a dot, so "Document
+              needed" fits one line on a 360dp phone (the tone says the state). */}
           <View style={{ alignSelf: 'flex-start', marginTop: 8 }}>
-            <Badge label={setup.label} tone={setup.tone} dot />
+            <Badge label={setup.label} tone={setup.tone} small />
           </View>
         </View>
       </View>
