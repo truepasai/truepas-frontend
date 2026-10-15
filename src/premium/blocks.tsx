@@ -500,8 +500,10 @@ export function FaceRing({
           {mode === "scan" && (photo || children != null) && <ScanBeam size={size - 64} />}
           {mode === "success" && <View style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(8,182,252,0.18)" }]} />}
         </View>
+        {/* Rounded like the tick: Android draws the box shadow of a square
+            wrapper as a square patch behind the circle. */}
         {mode === "success" && (
-          <View style={[{ position: "absolute", bottom: 4 }, SH.sky]}>
+          <View style={[{ position: "absolute", bottom: 4, borderRadius: 26 }, SH.sky]}>
             <VerifiedTick size={52} />
           </View>
         )}
