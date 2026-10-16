@@ -12,9 +12,11 @@ export type Prefs = {
   haptics: boolean;
   /** Ask for fingerprint / face unlock when opening the app. */
   appLock: boolean;
+  /** The one-time "Unlock TruePas with Face ID?" offer was answered. */
+  appLockAsked: boolean;
 };
 
-const DEFAULTS: Prefs = { haptics: true, appLock: false };
+const DEFAULTS: Prefs = { haptics: true, appLock: false, appLockAsked: false };
 const KEY = 'truepas.prefs.v1';
 
 let current: Prefs = DEFAULTS;

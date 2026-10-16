@@ -41,6 +41,7 @@ import { useBookings } from '@/features/history/hooks';
 import { useIdentitySummary } from '@/features/identity/hooks';
 import { useNotificationCount } from '@/features/notifications/hooks';
 import { useProfilePicture, useSyncProfilePicture } from '@/features/profile/hooks';
+import { AppLockOffer } from '@/features/settings/AppLockOffer';
 import { IdentityCard, TAB_BAR_SPACE } from '@/premium/blocks';
 import {
   ActivityRow,
@@ -342,6 +343,7 @@ export default function HomeScreen() {
       </SafeAreaView>
 
       <ProfileDrawer visible={drawer} onClose={() => setDrawer(false)} />
+      <AppLockOffer />
     </View>
   );
 }

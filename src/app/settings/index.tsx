@@ -33,7 +33,7 @@ import { Linking, Platform } from 'react-native';
 
 import { toApiError } from '@/api/errors';
 import { usePreferences, useUpdatePreferences } from '@/features/account/hooks';
-import { biometricsAvailable, confirmWithBiometrics, markUnlocked } from '@/features/settings/AppLock';
+import { biometricsAvailable, confirmWithBiometrics, markUnlocked, useBiometricName } from '@/features/settings/AppLock';
 import { useToast } from '@/hooks/useToast';
 import { APP_VERSION } from '@/premium/flows/account';
 import { ConfirmSheet } from '@/premium/kit';
@@ -46,6 +46,7 @@ export default function SettingsScreen() {
   const toast = useToast();
   const appLock = usePref('appLock');
   const haptics = usePref('haptics');
+  const biometric = useBiometricName();
   const [busy, setBusy] = useState(false);
   const [confirmFaceOff, setConfirmFaceOff] = useState(false);
   const native = Platform.OS !== 'web';
@@ -104,7 +105,13 @@ export default function SettingsScreen() {
           icon={Fingerprint}
           tone="sky"
           title="App lock"
-          sub={native ? 'Unlock TruePas with your fingerprint or face' : 'Available in the mobile app'}
+          sub={
+            !native
+              ? 'Available in the mobile app'
+              : biometric === 'fingerprint or face unlock'
+                ? 'Unlock TruePas with your fingerprint or face'
+                : `Unlock TruePas with ${biometric}`
+          }
           trailing={<Toggle on={appLock} disabled={!native || busy} onChange={(v) => void toggleAppLock(v)} label="App lock" />}
           chevron={false}
         />

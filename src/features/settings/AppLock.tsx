@@ -7,7 +7,7 @@
  */
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Lock } from 'lucide-react-native';
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState, Platform, StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -37,6 +37,43 @@ export async function biometricsAvailable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Name of the phone's unlock, as people know it: "Face ID" / "Touch ID" on
+ *  iPhone; Android mixes fingerprint and face, so it says both. */
+export type BiometricName = 'Face ID' | 'Touch ID' | 'fingerprint or face unlock';
+
+let biometricNameCache: BiometricName | null = null;
+
+export async function biometricName(): Promise<BiometricName> {
+  if (biometricNameCache) return biometricNameCache;
+  let name: BiometricName = 'fingerprint or face unlock';
+  if (Platform.OS === 'ios') {
+    try {
+      const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+      name = types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION) ? 'Face ID' : 'Touch ID';
+    } catch {
+      name = 'Face ID';
+    }
+  }
+  biometricNameCache = name;
+  return name;
+}
+
+/** biometricName() for render; Android's wording until it resolves. */
+export function useBiometricName(): BiometricName {
+  const [name, setName] = useState<BiometricName>(biometricNameCache ?? (Platform.OS === 'ios' ? 'Face ID' : 'fingerprint or face unlock'));
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let alive = true;
+    void biometricName().then((n) => {
+      if (alive) setName(n);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return name;
 }
 
 /* Unlock state lives outside React: Settings marks the session unlocked right
@@ -84,6 +121,7 @@ export function AppLock() {
   const active = Platform.OS !== 'web' && signedIn && enabled;
   const locked = active && loaded && !unlocked;
   const backgroundAt = useRef<number | null>(null);
+  const name = useBiometricName();
 
   // Relock after a while in the background; short trips (camera, photo
   // picker) don't count.
@@ -131,7 +169,7 @@ export function AppLock() {
         TruePas is locked
       </Txt>
       <Txt v="body" color="rgba(255,255,255,0.7)" center style={{ marginTop: 8, marginBottom: 28 }}>
-        Use your fingerprint or face to continue.
+        {name === 'fingerprint or face unlock' ? 'Use your fingerprint or face to continue.' : `Use ${name} to continue.`}
       </Txt>
       <Button label="Unlock" icon={Lock} onPress={() => void unlock()} />
     </View>
