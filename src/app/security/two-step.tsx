@@ -343,12 +343,13 @@ export default function TwoStepScreen() {
       footer={
         me.isPending && !source ? undefined : choosing ? (
           <Button
+            key="start"
             label={enabled ? 'Continue' : 'Turn on'}
             loading={enable.isPending}
             onPress={() => void start(choice)}
           />
         ) : (
-          <Button label="Turn off" tone="white" icon={ShieldOff} onPress={() => setStage('disable')} />
+          <Button key="off" label="Turn off" tone="white" icon={ShieldOff} onPress={() => setStage('disable')} />
         )
       }>
       <Row between align="flex-start">

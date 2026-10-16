@@ -402,7 +402,10 @@ export function Button({
               ? { backgroundColor: "rgba(255,255,255,0.1)", borderWidth: 1, borderColor: "rgba(255,255,255,0.22)" }
             : tone === "danger"
               ? { backgroundColor: C.red }
-              : {};
+              : // Solid sky under the gradient: on Android a gradient mounted into an
+                // already-rendered button (e.g. "Turn off" → "Continue") can fail to
+                // paint, leaving white text on nothing — BUG031.
+                { backgroundColor: C.sky };
   return (
     <Press
       onPress={onPress}
