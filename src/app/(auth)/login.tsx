@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowRight, Mail, Phone, ScanFace } from 'lucide-react-native';
+import { ArrowRight, Mail, Phone } from 'lucide-react-native';
 import { useState } from 'react';
 import { View } from 'react-native';
 
@@ -12,9 +12,8 @@ import { loginSchema } from '@/features/auth/schemas';
 import { sessionStarted } from '@/features/auth/slice';
 import { formatWait, lockSecondsFrom, useLockCountdown } from '@/features/auth/useLockCountdown';
 import { AuthScreen, CountryCodePicker, LinkRow, PasswordField, Segmented } from '@/premium/flows/auth';
-import { Banner, ComingSoon } from '@/premium/kit';
-import { C } from '@/premium/theme';
-import { Button, Field, Heading, Row, TextLink, TopBar, Txt } from '@/premium/ui';
+import { Banner } from '@/premium/kit';
+import { Button, Field, Heading, Row, TextLink, TopBar } from '@/premium/ui';
 import { useAppDispatch } from '@/store';
 import { isTwoFactorChallenge } from '@/types/domain';
 
@@ -209,18 +208,8 @@ export default function LoginScreen() {
           disabled={!identifier.trim() || !password || lock.locked}
           onPress={() => void submit()}
         />
-        <Row gap={12}>
-          <View style={{ flex: 1, height: 1, backgroundColor: C.line }} />
-          <Txt v="small">or</Txt>
-          <View style={{ flex: 1, height: 1, backgroundColor: C.line }} />
-        </Row>
-        {/* Face sign-in (§4.5) waits on a security review — shown, but inert. */}
-        <View accessibilityState={{ disabled: true }} accessibilityHint="Coming soon">
-          <Button label="Sign in with your face" tone="white" icon={ScanFace} disabled />
-          <View pointerEvents="none" style={{ position: 'absolute', top: -11, right: 18 }}>
-            <ComingSoon />
-          </View>
-        </View>
+        {/* Face sign-in (§4.5) waits on a security review — not shown until
+            it ships (api.faceLogin is ready). */}
       </View>
     </AuthScreen>
   );
