@@ -9,12 +9,11 @@
  *   kiosk — it refuses face check-in for the account holder.
  * - Notifications: which alerts you get (/notification/preferences).
  * - Phone permissions: camera and photos open the system settings page for
- *   TruePas. The app never asks for notification permission (no push yet),
- *   so phone notifications sit in "On the way" with Language.
+ *   TruePas. The app never asks for notification permission (no push yet).
+ *   Phone notifications and Language aren't listed until they ship.
  * Then account, support and legal links.
  */
 import {
-  Bell,
   BellRing,
   Camera,
   CircleHelp,
@@ -22,7 +21,6 @@ import {
   FileText,
   Fingerprint,
   Info,
-  Languages,
   Lock,
   Pencil,
   ScanFace,
@@ -37,7 +35,7 @@ import { toApiError } from '@/api/errors';
 import { usePreferences, useUpdatePreferences } from '@/features/account/hooks';
 import { biometricsAvailable, confirmWithBiometrics, markUnlocked } from '@/features/settings/AppLock';
 import { useToast } from '@/hooks/useToast';
-import { APP_VERSION, SoonSection } from '@/premium/flows/account';
+import { APP_VERSION } from '@/premium/flows/account';
 import { ConfirmSheet } from '@/premium/kit';
 import { C } from '@/premium/theme';
 import { go, Group, Heading, ListRow, Screen, Toggle, TopBar, Txt } from '@/premium/ui';
@@ -162,11 +160,6 @@ export default function SettingsScreen() {
       <Group title="Phone permissions">
         <ListRow icon={Camera} tone="sky" title="Camera & photos" sub="Face scans, documents and family photos" onPress={openPhoneSettings} />
       </Group>
-
-      <SoonSection title="On the way">
-        <ListRow icon={Bell} title="Phone notifications" />
-        <ListRow icon={Languages} title="Language" value="English" />
-      </SoonSection>
 
       <Group title="Account">
         <ListRow icon={Pencil} title="Edit profile" onPress={go('/profile/edit')} />
