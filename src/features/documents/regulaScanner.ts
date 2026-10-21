@@ -236,24 +236,25 @@ const FULL_PAGE_CAPTURE_BUTTON_DELAY_S = 4;
  * and passports, the whole camera view for full-page paper documents (A4
  * birth certificates), which don't fit the card frame. Full page also shows a
  * capture button in case edge detection can't lock onto the sheet.
- * Best effort: a failure leaves the previous frame.
+ * Fire-and-forget: Android's setFunctionality never calls back (awaiting it
+ * left the scanner unopened, spinning), and native module calls run in
+ * order, so it's applied before scan(). A failure leaves the previous frame.
  */
-function applyFrame(fullPage: boolean): Promise<void> {
-  if (!Functionality || !DocumentReader?.setFunctionality) return Promise.resolve();
+function applyFrame(fullPage: boolean): void {
+  if (!Functionality || !DocumentReader?.setFunctionality) return;
   const f = new Functionality();
   f.cameraFrame = fullPage ? (DocReaderFrame?.MAX ?? 'max') : (DocReaderFrame?.SCENARIO_DEFAULT ?? 'id1');
   f.showCaptureButton = fullPage;
   if (fullPage) f.showCaptureButtonDelayFromStart = FULL_PAGE_CAPTURE_BUTTON_DELAY_S;
-  return new Promise((resolve) => {
+  try {
     DocumentReader.setFunctionality(
       f,
-      () => resolve(),
-      (e: unknown) => {
-        console.warn('[DocScan] setFunctionality failed', e);
-        resolve();
-      },
+      () => {},
+      (e: unknown) => console.warn('[DocScan] setFunctionality failed', e),
     );
-  });
+  } catch (e) {
+    console.warn('[DocScan] setFunctionality failed', e);
+  }
 }
 
 export interface ScanOptions {
@@ -270,11 +271,11 @@ export interface ScanOptions {
  * authenticity checks, and face matching are done by the backend (same
  * architecture as Facepe, where the backend runs Regula server-side).
  */
-export async function scanDocument({ fullPage = false }: ScanOptions = {}): Promise<RegulaScanResult> {
+export function scanDocument({ fullPage = false }: ScanOptions = {}): Promise<RegulaScanResult> {
   if (!loadNativeModules() || !initialized) {
-    throw new Error('Regula scanner not initialized');
+    return Promise.reject(new Error('Regula scanner not initialized'));
   }
-  await applyFrame(fullPage);
+  applyFrame(fullPage);
 
   return new Promise<RegulaScanResult>((resolve, reject) => {
     let settled = false;
