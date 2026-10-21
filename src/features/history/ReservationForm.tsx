@@ -8,18 +8,31 @@
  * Server field errors land on their fields; anything else (409
  * RESERVATION_LIMIT, 404 member) shows in the banner. Check-in itself only
  * ever happens at the venue kiosk.
+ *
+ * The venue is a TruePas merchant picked from GET /merchants: a kiosk can
+ * only match a reservation that carries its merchantId. New reservations
+ * need a pick; typing after a pick drops it. A legacy free-text venue
+ * still edits as before unless the user picks one.
  */
-import { Building2, Check, MapPin, Minus, Plus, UserRound } from 'lucide-react-native';
+import { BadgeCheck, Building2, Check, MapPin, Minus, Plus, UserRound } from 'lucide-react-native';
 import { useState } from 'react';
-import { Pressable, Text, TextInput, View, type TextStyle } from 'react-native';
+import { Keyboard, Pressable, Text, TextInput, View, type TextStyle } from 'react-native';
 
 import { toApiError } from '@/api/errors';
+import { VENUE_SEARCH_MIN, useVenueSearch } from '@/features/history/hooks';
 import { BOOKING_KINDS, KIND_META, bookingKind, isoDay } from '@/premium/flows/home';
 import { DateField } from '@/premium/flows/family';
-import { Banner } from '@/premium/kit';
+import { Banner, Spinner } from '@/premium/kit';
 import { C, F, R } from '@/premium/theme';
-import { Button, Chip, Field, Heading, Row, Screen, TextLink, TopBar, Txt } from '@/premium/ui';
-import type { Booking, BookingKind, CreateReservationRequest, FamilyMember, UpdateReservationRequest } from '@/types/domain';
+import { Button, Chip, Field, Group, Heading, ListRow, Row, Screen, TextLink, TopBar, Txt } from '@/premium/ui';
+import type {
+  Booking,
+  BookingKind,
+  CreateReservationRequest,
+  FamilyMember,
+  MerchantSummary,
+  UpdateReservationRequest,
+} from '@/types/domain';
 
 export const NOTES_MAX = 500;
 const GUESTS_MIN = 1;
@@ -27,6 +40,8 @@ const GUESTS_MAX = 100;
 
 export interface ReservationDraft {
   venue: string;
+  /** The picked TruePas venue; null for none or a legacy free-text venue. */
+  merchantId: string | null;
   location: string;
   kind: BookingKind;
   checkIn: string;
@@ -41,6 +56,7 @@ type Errors = Partial<Record<FieldKey, string>>;
 
 export const EMPTY_DRAFT: ReservationDraft = {
   venue: '',
+  merchantId: null,
   location: '',
   kind: 'other',
   checkIn: '',
@@ -69,6 +85,7 @@ export function membersKnown(b: Booking, family: FamilyMember[]): boolean {
 export function draftFromBooking(b: Booking, family: FamilyMember[]): ReservationDraft {
   return {
     venue: b.venue ?? '',
+    merchantId: b.merchantId ?? null,
     location: b.location ?? '',
     kind: bookingKind(b),
     checkIn: (b.checkIn ?? '').slice(0, 10),
@@ -79,11 +96,17 @@ export function draftFromBooking(b: Booking, family: FamilyMember[]): Reservatio
   };
 }
 
+/** A new reservation, or one already at a TruePas venue, needs a picked
+ *  venue; a legacy free-text one may keep free text. */
+const needsVenuePick = (original?: ReservationDraft) => !original || !!original.merchantId;
+
 /** Same rules as the backend. An unchanged check-in day is not re-checked:
  *  a stay that started yesterday is still an editable upcoming reservation. */
 function validate(d: ReservationDraft, original?: ReservationDraft): Errors {
   const e: Errors = {};
-  if (!d.venue.trim()) e.venue = 'Enter the venue name';
+  if (needsVenuePick(original)) {
+    if (!d.merchantId) e.venue = 'Choose a venue from the search results';
+  } else if (!d.venue.trim()) e.venue = 'Enter the venue name';
   if (!d.checkIn) e.checkIn = 'Pick the check-in date';
   else if (d.checkIn < isoDay() && d.checkIn !== original?.checkIn) e.checkIn = "Check-in can't be in the past";
   if (d.checkOut && d.checkIn && d.checkOut < d.checkIn) e.checkOut = 'Check-out must be on or after check-in';
@@ -94,6 +117,7 @@ function validate(d: ReservationDraft, original?: ReservationDraft): Errors {
 
 function toCreate(d: ReservationDraft): CreateReservationRequest {
   const p: CreateReservationRequest = { venue: d.venue.trim(), kind: d.kind, checkIn: d.checkIn, guests: d.guests };
+  if (d.merchantId) p.merchantId = d.merchantId;
   if (d.location.trim()) p.location = d.location.trim();
   if (d.checkOut) p.checkOut = d.checkOut;
   if (d.memberIds.length > 0) p.memberIds = d.memberIds;
@@ -106,7 +130,12 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
 /** Only what changed (PATCH accepts any subset). */
 function toPatch(d: ReservationDraft, o: ReservationDraft): UpdateReservationRequest {
   const p: UpdateReservationRequest = {};
-  if (d.venue.trim() !== o.venue.trim()) p.venue = d.venue.trim();
+  // A venue sent without merchantId drops the merchant upstream, so a picked
+  // venue always goes with its id.
+  if (d.venue.trim() !== o.venue.trim() || d.merchantId !== o.merchantId) {
+    p.venue = d.venue.trim();
+    if (d.merchantId) p.merchantId = d.merchantId;
+  }
   if (d.location.trim() !== o.location.trim()) p.location = d.location.trim();
   if (d.kind !== o.kind) p.kind = d.kind;
   if (d.checkIn !== o.checkIn) p.checkIn = d.checkIn;
@@ -120,6 +149,9 @@ function toPatch(d: ReservationDraft, o: ReservationDraft): UpdateReservationReq
 /** 422 field names (camelCase or snake_case) → form fields. */
 const FIELD_OF: Record<string, FieldKey> = {
   venue: 'venue',
+  // 422 MERCHANT_UNAVAILABLE: the picked venue was removed or deactivated.
+  merchantId: 'venue',
+  merchant_id: 'venue',
   location: 'location',
   kind: 'kind',
   checkIn: 'checkIn',
@@ -158,10 +190,28 @@ export function ReservationForm({
   const [errors, setErrors] = useState<Errors>({});
   const [banner, setBanner] = useState<string | null>(null);
   const editing = mode === 'edit';
+  // Results show once the user types in the venue field, until a pick.
+  const [venueTyped, setVenueTyped] = useState(false);
+  const venueSearch = useVenueSearch(d.venue, venueTyped && !d.merchantId);
+  const pickRequired = needsVenuePick(editing ? initial : undefined);
 
   const set = <K extends FieldKey>(k: K, v: ReservationDraft[K]) => {
     setD((prev) => ({ ...prev, [k]: v }));
     if (errors[k]) setErrors((prev) => ({ ...prev, [k]: undefined }));
+  };
+
+  /** Typing searches again and drops any picked venue. */
+  const typeVenue = (t: string) => {
+    setD((prev) => ({ ...prev, venue: t, merchantId: null }));
+    setVenueTyped(true);
+    if (errors.venue) setErrors((prev) => ({ ...prev, venue: undefined }));
+  };
+
+  const pickVenue = (m: MerchantSummary) => {
+    setD((prev) => ({ ...prev, venue: m.businessName, merchantId: m.merchantId }));
+    setVenueTyped(false);
+    if (errors.venue) setErrors((prev) => ({ ...prev, venue: undefined }));
+    Keyboard.dismiss();
   };
 
   const toggleMember = (id: string) =>
@@ -185,6 +235,11 @@ export function ReservationForm({
       else if (msg) loose.push(msg);
     }
     setErrors(fieldErrors);
+    if (err.serverCode === 'MERCHANT_UNAVAILABLE') {
+      // The picked venue is gone: drop it and show matches for its name again.
+      setD((prev) => ({ ...prev, merchantId: null }));
+      setVenueTyped(true);
+    }
     const mapped = Object.keys(fieldErrors).length > 0;
     setBanner(loose.length > 0 ? loose.join('\n') : mapped ? null : err.message);
   };
@@ -217,15 +272,41 @@ export function ReservationForm({
       {banner != null && <Banner tone="error" title={editing ? "Couldn't save changes" : "Couldn't add the reservation"} body={banner} />}
 
       <View style={{ gap: 18 }}>
-        <Field
-          label="Venue"
-          icon={Building2}
-          placeholder="e.g. Taj Lands End"
-          value={d.venue}
-          onChangeText={(t) => set('venue', t)}
-          error={errors.venue}
-          inputProps={{ autoCapitalize: 'words', maxLength: 120, autoComplete: 'off' }}
-        />
+        <View style={{ gap: 10 }}>
+          <Field
+            label="Venue"
+            icon={Building2}
+            placeholder="Search TruePas venues"
+            value={d.venue}
+            onChangeText={typeVenue}
+            error={errors.venue}
+            hint={
+              d.merchantId
+                ? 'TruePas venue selected.'
+                : pickRequired && !venueSearch.active
+                  ? `Type at least ${VENUE_SEARCH_MIN} characters, then choose your venue from the list.`
+                  : undefined
+            }
+            right={
+              d.merchantId ? (
+                <BadgeCheck size={19} color={C.green} strokeWidth={2.2} />
+              ) : venueSearch.searching ? (
+                <Spinner size={18} />
+              ) : undefined
+            }
+            inputProps={{ autoCapitalize: 'words', maxLength: 120, autoComplete: 'off', autoCorrect: false }}
+          />
+          {venueSearch.active && (
+            <VenueResults
+              query={d.venue.trim()}
+              results={venueSearch.results}
+              searching={venueSearch.searching}
+              failed={venueSearch.failed}
+              onPick={pickVenue}
+              onRetry={venueSearch.retry}
+            />
+          )}
+        </View>
         <Field
           label="Location (optional)"
           icon={MapPin}
@@ -317,6 +398,48 @@ export function ReservationForm({
 }
 
 /* ───────────────────────── pieces ───────────────────────── */
+
+/** Matches under the venue field; pressing one picks it. */
+function VenueResults({
+  query,
+  results,
+  searching,
+  failed,
+  onPick,
+  onRetry,
+}: {
+  query: string;
+  results: MerchantSummary[];
+  searching: boolean;
+  failed: boolean;
+  onPick: (m: MerchantSummary) => void;
+  onRetry: () => void;
+}) {
+  if (results.length > 0) {
+    return (
+      <Group>
+        {results.map((m) => (
+          <ListRow key={m.merchantId} icon={Building2} tone="sky" title={m.businessName} chevron={false} onPress={() => onPick(m)} />
+        ))}
+      </Group>
+    );
+  }
+  if (failed) {
+    return (
+      <Row gap={8} style={{ flexWrap: 'wrap', paddingHorizontal: 4 }}>
+        <Txt v="small" color={C.redInk}>
+          {"Couldn't search venues."}
+        </Txt>
+        <TextLink label="Try again" onPress={onRetry} />
+      </Row>
+    );
+  }
+  return (
+    <Txt v="small" style={{ paddingHorizontal: 4 }}>
+      {searching ? 'Searching venues…' : `No TruePas venue matches "${query}".`}
+    </Txt>
+  );
+}
 
 function StepButton({ icon: Icon, label, disabled, onPress }: { icon: typeof Plus; label: string; disabled: boolean; onPress: () => void }) {
   return (

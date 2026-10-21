@@ -17,6 +17,7 @@ import type {
     FaceLoginResult,
     FaceLoginStartResponse,
     LoginResult,
+    MerchantSummary,
     NotificationCount,
     NotificationPreferences,
     NotificationType,
@@ -499,6 +500,12 @@ export const realApi = {
   },
 
   // ── Bookings / reservations ──────────────────────────────────────────
+  /** TruePas venues for the reservation form: active merchants matching
+   *  every query word, at most 10. A blank query returns []. */
+  searchMerchants: async (q: string, limit = 10): Promise<MerchantSummary[]> => {
+    const { data } = await apiClient.get<MerchantSummary[]>('/merchants', { params: { q, limit } });
+    return Array.isArray(data) ? data : [];
+  },
   createReservation: async (payload: CreateReservationRequest): Promise<Booking> => {
     const { data } = await apiClient.post<Booking>('/bookings', payload);
     return data;

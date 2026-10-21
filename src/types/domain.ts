@@ -153,11 +153,23 @@ export interface Booking {
   /** The other side of a reservation <-> check-in link. */
   linkedBookingId?: string | null;
   createdAt?: string | null;
+  /** The TruePas venue (merchant) a reservation is for; null on free-text
+   *  venues, which a kiosk check-in can't match. */
+  merchantId?: string | null;
+}
+
+/** GET /merchants?q= — a TruePas venue the customer can reserve at. */
+export interface MerchantSummary {
+  merchantId: string;
+  businessName: string;
 }
 
 /** POST /bookings — a customer reservation. Dates are local YYYY-MM-DD. */
 export interface CreateReservationRequest {
   venue: string;
+  /** Picked from GET /merchants; the BFF checks it is an active merchant
+   *  and sets `venue` to its registered business name. */
+  merchantId?: string;
   location?: string;
   kind?: BookingKind;
   checkIn: string;

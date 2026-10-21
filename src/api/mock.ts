@@ -16,6 +16,7 @@ import type {
     FaceLoginResult,
     FaceLoginStartResponse,
     LoginResult,
+    MerchantSummary,
     NotificationCount,
     NotificationPreferences,
     NotificationType,
@@ -73,6 +74,7 @@ import bookingsData from './data/bookings.json';
 import documentsData from './data/documents.json';
 import familyData from './data/family.json';
 import identitySummaryData from './data/identitySummary.json';
+import merchantsData from './data/merchants.json';
 import userData from './data/user.json';
 
 /**
@@ -117,6 +119,7 @@ let family: FamilyMember[] = (familyData as FamilyMember[]).map((f) => ({
   faceEnrolled: false,
 }));
 let bookings: Booking[] = bookingsData as Booking[];
+const merchants: MerchantSummary[] = merchantsData as MerchantSummary[];
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 let notifications: Notification[] = [
   { id: 'n1', title: 'Face enrolled', body: 'Your face is set up for check-in.', read: false, createdAt: minutesAgo(30), type: 'identity', data: { type: 'identity' } },
@@ -566,16 +569,30 @@ export const mockApi = {
   },
 
   // ── Bookings / reservations ──────────────────────────────────────────
+  /** Every query word must start a word of the business name (as upstream). */
+  searchMerchants: (q: string, limit = 10): Promise<MerchantSummary[]> => {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return respond([]);
+    const hits = merchants.filter((m) => {
+      const name = m.businessName.toLowerCase().split(/[^a-z0-9]+/);
+      return words.every((w) => name.some((n) => n.startsWith(w)));
+    });
+    return respond(hits.slice(0, Math.min(limit, 10)));
+  },
   createReservation: (payload: CreateReservationRequest): Promise<Booking> => {
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    if (!payload.venue?.trim()) return fail('Venue is required');
+    const merchant = payload.merchantId ? merchants.find((m) => m.merchantId === payload.merchantId) : undefined;
+    if (payload.merchantId && !merchant) return fail("This venue isn't available. Search for it and choose it again.");
+    // As the BFF: a picked venue's name is the merchant's registered one.
+    const venue = (merchant?.businessName ?? payload.venue ?? '').trim();
+    if (!venue) return fail('Venue is required');
     if (payload.checkIn < todayStr) return fail('Check-in date cannot be in the past');
     if (payload.checkOut && payload.checkOut < payload.checkIn) return fail('Check-out must be on or after check-in');
     const booking: Booking = {
       id: nextId('res-'),
       source: 'customer',
-      venue: payload.venue.trim(),
+      venue,
       location: payload.location ?? '',
       type: 'reservation',
       kind: payload.kind ?? 'other',
@@ -591,6 +608,7 @@ export const mockApi = {
       checkedInMembers: [],
       linkedBookingId: null,
       createdAt: new Date().toISOString(),
+      merchantId: merchant?.merchantId ?? null,
     };
     bookings = [booking, ...bookings];
     pushNotification('Reservation added', `${booking.venue}, ${booking.checkIn}`, 'booking', { type: 'booking', bookingId: booking.id });
@@ -600,7 +618,12 @@ export const mockApi = {
     const b = bookings.find((x) => x.id === id);
     if (!b) return fail('Booking not found');
     if (b.source !== 'customer' || b.status !== 'upcoming') return fail("This booking can't be changed any more.");
+    const merchant = patch.merchantId ? merchants.find((m) => m.merchantId === patch.merchantId) : undefined;
+    if (patch.merchantId && !merchant) return fail("This venue isn't available. Search for it and choose it again.");
     const updated: Booking = { ...b, ...patch, checkOut: patch.checkOut ?? b.checkOut, notes: patch.notes ?? b.notes };
+    // As upstream: a picked venue takes the merchant's name; a new free-text venue drops the merchant.
+    if (merchant) updated.venue = merchant.businessName;
+    else if (patch.venue != null && patch.venue !== b.venue) updated.merchantId = null;
     bookings = bookings.map((x) => (x.id === id ? updated : x));
     return respond(updated);
   },

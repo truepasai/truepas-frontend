@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
@@ -7,7 +8,46 @@ import type { Booking, CreateReservationRequest, UpdateReservationRequest } from
 export const historyKeys = {
   all: ['bookings'] as const,
   detail: (id: string) => ['bookings', id] as const,
+  venues: (q: string) => ['merchants', 'search', q] as const,
 };
+
+/** Venue search starts at this many characters. */
+export const VENUE_SEARCH_MIN = 2;
+const VENUE_SEARCH_DEBOUNCE_MS = 300;
+/** The BFF rejects longer queries. */
+const VENUE_SEARCH_MAX = 100;
+
+/** GET /merchants?q= — TruePas venues for the reservation form, debounced.
+ *  `searching` also covers the debounce wait, so "no matches" never shows
+ *  for text that hasn't been searched yet. A 4xx isn't retried. */
+export function useVenueSearch(text: string, enabled: boolean) {
+  const q = text.trim().slice(0, VENUE_SEARCH_MAX);
+  const [debounced, setDebounced] = useState(q);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(q), VENUE_SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [q]);
+
+  const active = enabled && q.length >= VENUE_SEARCH_MIN;
+  const settled = debounced === q;
+  const query = useQuery({
+    queryKey: historyKeys.venues(debounced),
+    queryFn: () => api.searchMerchants(debounced),
+    enabled: active && debounced.length >= VENUE_SEARCH_MIN,
+    placeholderData: keepPreviousData,
+    retry: (failureCount, error) => {
+      const status = toApiError(error).status;
+      return !(status != null && status >= 400 && status < 500) && failureCount < 1;
+    },
+  });
+  return {
+    active,
+    searching: active && (!settled || query.isFetching),
+    failed: active && settled && query.isError && !query.isFetching,
+    results: active ? (query.data ?? []) : [],
+    retry: () => void query.refetch(),
+  };
+}
 
 export function useBookings() {
   return useQuery({ queryKey: historyKeys.all, queryFn: api.getBookings });
