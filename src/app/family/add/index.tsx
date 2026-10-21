@@ -9,10 +9,13 @@
  * backing out of a later step lands on it with "Continue setup".
  * A duplicate (same name + DOB) is caught here, before anything is created,
  * and so is an age that doesn't fit the relationship (relationshipAge.ts).
+ * A Twin whose date of birth is more than a day from everyone's in the
+ * family (holder included) is confirmed first: "Check the date" or Continue
+ * (the first of twin children has no twin added yet).
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
-import { ArrowRight, User, UserRound } from 'lucide-react-native';
+import { ArrowRight, CalendarDays, User, UserRound } from 'lucide-react-native';
 import { useState } from 'react';
 import { View } from 'react-native';
 
@@ -28,8 +31,8 @@ import {
   TWIN_RELATIONSHIP,
   useAddFamilyMember,
 } from '@/features/family/hooks';
-import { MAX_MEMBER_AGE, relationshipAgeError } from '@/features/family/relationshipAge';
-import { DateField } from '@/premium/flows/family';
+import { MAX_MEMBER_AGE, relationshipAgeError, sharesTwinBirthday } from '@/features/family/relationshipAge';
+import { DateField, formatDate } from '@/premium/flows/family';
 import { Banner, ConfirmSheet } from '@/premium/kit';
 import { C } from '@/premium/theme';
 import { Button, Chip, Field, Heading, Row, Screen, Steps, TopBar, Txt } from '@/premium/ui';
@@ -59,6 +62,8 @@ export default function AddFamilyScreen() {
   const [errors, setErrors] = useState<{ name?: string; dob?: string; relationship?: string }>({});
   const [checking, setChecking] = useState(false);
   const [existing, setExisting] = useState<FamilyMember | null>(null);
+  // Twin whose birthday matches nobody in the family: confirm before adding.
+  const [twinDobCheck, setTwinDobCheck] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   /** Member page underneath, the face capture on top (step 2 of 3). */
@@ -72,7 +77,7 @@ export default function AddFamilyScreen() {
     });
   };
 
-  const submit = async () => {
+  const submit = async (twinDobConfirmed = false) => {
     const trimmed = fullName.trim();
     const next: typeof errors = {};
     if (trimmed.length < 2) next.name = 'Name is required';
@@ -105,6 +110,17 @@ export default function AddFamilyScreen() {
         const match = findMatchingMember(list, trimmed, dob);
         if (match) {
           setExisting(match);
+          return;
+        }
+        // A twin shares a birthday (±1 day) with their twin: the holder or
+        // someone already in the family. The first of twin children has no
+        // twin here yet, so this asks instead of blocking.
+        if (
+          relationship === TWIN_RELATIONSHIP &&
+          !twinDobConfirmed &&
+          !sharesTwinBirthday(dob, [ownDob, ...list.map((m) => m.dateOfBirth)])
+        ) {
+          setTwinDobCheck(true);
           return;
         }
       } catch {
@@ -199,7 +215,10 @@ export default function AddFamilyScreen() {
         <DateField
           label="Date of birth"
           value={dob || undefined}
-          onChange={setDob}
+          onChange={(v) => {
+            setDob(v);
+            setErrors((e) => ({ ...e, dob: undefined }));
+          }}
           placeholder="Select date of birth"
           minDate={isoYearsAgo(MAX_MEMBER_AGE)}
           maxDate={isoYearsAgo(0)}
@@ -228,6 +247,24 @@ export default function AddFamilyScreen() {
           if (existing) router.replace({ pathname: '/family/[id]', params: { id: existing.id } });
         }}
         onCancel={() => setExisting(null)}
+      />
+
+      <ConfirmSheet
+        visible={twinDobCheck}
+        icon={CalendarDays}
+        title="No one shares this birthday"
+        body={`Twins are born on the same day, or a day apart. Nobody in your family has a date of birth near ${formatDate(dob)}. If their twin isn't added yet, continue and add them next with the same date.`}
+        confirmLabel="Continue"
+        cancelLabel="Check the date"
+        loading={checking}
+        onConfirm={() => {
+          setTwinDobCheck(false);
+          void submit(true);
+        }}
+        onCancel={() => {
+          setTwinDobCheck(false);
+          setErrors((e) => ({ ...e, dob: 'Twins share a birthday — check this date' }));
+        }}
       />
     </Screen>
   );

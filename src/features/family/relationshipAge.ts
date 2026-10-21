@@ -5,6 +5,27 @@ export const MAX_MEMBER_AGE = 120;
 /** A parent must be at least this many years older than the account holder. */
 const MIN_PARENT_GAP = 12;
 
+/** Twins born either side of midnight have consecutive birthdays — the
+ *  same tolerance the backend uses to group a twin set. */
+const TWIN_DOB_TOLERANCE_DAYS = 1;
+
+function dayNumber(iso: string): number | null {
+  const m = iso.split('T')[0].match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86_400_000;
+}
+
+/** Whether `dob` is within a day of any of `others` (the holder and the
+ *  family members): a twin shares a birthday with their twin. */
+export function sharesTwinBirthday(dob: string, others: (string | null | undefined)[]): boolean {
+  const day = dayNumber(dob);
+  if (day == null) return false;
+  return others.some((o) => {
+    const other = o ? dayNumber(o) : null;
+    return other != null && Math.abs(other - day) <= TWIN_DOB_TOLERANCE_DAYS;
+  });
+}
+
 /**
  * Age check for a new family member, by relationship. Returns the message to
  * show under the date of birth, or null when the age fits.
