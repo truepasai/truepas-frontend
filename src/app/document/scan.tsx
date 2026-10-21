@@ -42,9 +42,18 @@ type ScanStep = 'front' | 'done';
  *  `retake` param (set by the result screens): reset to a fresh capture.
  *  Family mode: when `family` param is set, routes to family/add/processing
  *  after capture instead of the user document processing screen. */
+
+/** Height ÷ width of an A4 sheet. */
+const A4_RATIO = 297 / 210;
+
+/** Paper documents printed on a full page rather than a card. */
+function isFullPageDocument(type?: string): boolean {
+  return type === 'birthCertificate';
+}
+
 export default function DocumentScanScreen() {
   const router = useRouter();
-  const { width: winW } = useWindowDimensions();
+  const { width: winW, height: winH } = useWindowDimensions();
   const { type, label, expiresAt, family, personId, name, dob, relationship, band, retake } = useLocalSearchParams<{
     type?: string;
     label?: string;
@@ -58,6 +67,8 @@ export default function DocumentScanScreen() {
     retake?: string;
   }>();
   const isFamilyMode = family === '1';
+  // A4 paper (birth certificate): full-view scanner frame, no MRZ (TPAP039).
+  const fullPage = isFullPageDocument(type);
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const [capturing, setCapturing] = useState(false);
@@ -83,9 +94,14 @@ export default function DocumentScanScreen() {
   // camera view — the crop math in handleCapture depends on that. The Regula
   // scanner crops natively and does not use it.
   const FRONT_FRAME = useMemo<ScanFrameSize>(() => {
+    if (fullPage) {
+      // A4 portrait (210 × 297), kept to about half the screen height.
+      const width = Math.round(Math.min(300, winW - 64, (winH * 0.55) / A4_RATIO));
+      return { width, height: Math.round(width * A4_RATIO) };
+    }
     const width = Math.round(Math.min(330, winW - 48));
     return { width, height: Math.round(width * (214 / 330)) };
-  }, [winW]);
+  }, [winW, winH, fullPage]);
 
   // ── Regula native scanner state ──────────────────────────────────────────
   const regulaAvailable = useMemo(() => isRegulaAvailable(), []);
@@ -132,7 +148,7 @@ export default function DocumentScanScreen() {
     setRegulaBusy(true);
     setScanError(null);
     try {
-      const result = await scanDocument();
+      const result = await scanDocument({ fullPage });
       setFrontImage(result.imageBase64);
       setFrontPreview(result.previewBase64);
       setStep('done');
@@ -452,7 +468,7 @@ export default function DocumentScanScreen() {
     <DocScanView
       topTitle={scanTitle}
       title="Scan front of document"
-      hint="Align the document within the frame"
+      hint={fullPage ? 'Fit the whole page within the frame' : 'Align the document within the frame'}
       onBack={close}
       camera={
         <CameraView

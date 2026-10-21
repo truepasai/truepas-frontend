@@ -26,6 +26,8 @@ let ProcessParams: any = null;
 let RNRegulaDocumentReader: any = null;
 let Enum: any = null;
 let ScenarioIdentifier: any = null;
+let Functionality: any = null;
+let DocReaderFrame: any = null;
 
 let loadAttempted = false;
 
@@ -52,6 +54,8 @@ function loadNativeModules(): boolean {
     ProcessParams = docModule.ProcessParams;
     Enum = docModule.Enum;
     ScenarioIdentifier = docModule.ScenarioIdentifier;
+    Functionality = docModule.Functionality;
+    DocReaderFrame = docModule.DocReaderFrame;
   } catch {
     // Native modules unavailable (Expo Go) — caller must fall back
   }
@@ -222,6 +226,42 @@ export interface RegulaScanResult {
   previewBase64: string;
 }
 
+/** Seconds before the manual capture button shows on a full-page scan, so
+ *  auto-capture gets a chance first. */
+const FULL_PAGE_CAPTURE_BUTTON_DELAY_S = 4;
+
+/**
+ * Camera frame for this scan. Functionality is global in the SDK, so every
+ * scan sets it: a card-shaped frame (Regula's default, "id1") for ID cards
+ * and passports, the whole camera view for full-page paper documents (A4
+ * birth certificates), which don't fit the card frame. Full page also shows a
+ * capture button in case edge detection can't lock onto the sheet.
+ * Best effort: a failure leaves the previous frame.
+ */
+function applyFrame(fullPage: boolean): Promise<void> {
+  if (!Functionality || !DocumentReader?.setFunctionality) return Promise.resolve();
+  const f = new Functionality();
+  f.cameraFrame = fullPage ? (DocReaderFrame?.MAX ?? 'max') : (DocReaderFrame?.SCENARIO_DEFAULT ?? 'id1');
+  f.showCaptureButton = fullPage;
+  if (fullPage) f.showCaptureButtonDelayFromStart = FULL_PAGE_CAPTURE_BUTTON_DELAY_S;
+  return new Promise((resolve) => {
+    DocumentReader.setFunctionality(
+      f,
+      () => resolve(),
+      (e: unknown) => {
+        console.warn('[DocScan] setFunctionality failed', e);
+        resolve();
+      },
+    );
+  });
+}
+
+export interface ScanOptions {
+  /** A full-page paper document (A4 birth certificate): whole-view frame,
+   *  edge detection without MRZ (Locate), manual capture button. */
+  fullPage?: boolean;
+}
+
 /**
  * Open the native Regula scanner and resolve with the document image.
  * Rejects with RegulaScanCancelled if the user cancels.
@@ -230,10 +270,11 @@ export interface RegulaScanResult {
  * authenticity checks, and face matching are done by the backend (same
  * architecture as Facepe, where the backend runs Regula server-side).
  */
-export function scanDocument(): Promise<RegulaScanResult> {
+export async function scanDocument({ fullPage = false }: ScanOptions = {}): Promise<RegulaScanResult> {
   if (!loadNativeModules() || !initialized) {
-    return Promise.reject(new Error('Regula scanner not initialized'));
+    throw new Error('Regula scanner not initialized');
   }
+  await applyFrame(fullPage);
 
   return new Promise<RegulaScanResult>((resolve, reject) => {
     let settled = false;
@@ -309,8 +350,11 @@ export function scanDocument(): Promise<RegulaScanResult> {
 
     const config = new ScannerConfig();
     // MrzAndLocate: captures a high-quality raw camera image on-device;
-    // backend Regula does full OCR/classification server-side.
-    config.scenario = ScenarioIdentifier?.SCENARIO_MRZ_AND_LOCATE ?? 'MrzAndLocate';
+    // backend Regula does full OCR/classification server-side. A full-page
+    // paper document has no MRZ, so it only locates the page edges.
+    config.scenario = fullPage
+      ? (ScenarioIdentifier?.SCENARIO_LOCATE ?? 'Locate')
+      : (ScenarioIdentifier?.SCENARIO_MRZ_AND_LOCATE ?? 'MrzAndLocate');
 
     DocumentReader.scan(
       config,
