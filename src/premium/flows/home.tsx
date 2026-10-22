@@ -304,25 +304,38 @@ export function fmtSeconds(ms: number): string {
 
 const isUrl = (s?: string | null): s is string => !!s && /^https?:\/\//.test(s);
 
+/** Venue photo when a booking has none of its own and its kind has no
+ *  category photo (Other / plain reservations). */
+const GENERIC_VENUE_PHOTO: ImgKey = 'mumbai';
+
 /**
- * Venue imagery: the booking's own photo when the API sends a URL; otherwise
- * a category photo for known kinds; otherwise a navy gradient + icon.
+ * Venue imagery: the booking's own photo when the API sends a URL; if there
+ * is none, or it fails to load, the kind's category photo, else a generic
+ * venue photo — never a blank card.
  */
-export function BookingBackdrop({ b, iconSize = 44 }: { b: Booking; iconSize?: number }) {
+export function BookingBackdrop({ b }: { b: Booking }) {
   const meta = KIND_META[bookingKind(b)];
-  if (isUrl(b.image)) {
-    return <Image source={{ uri: b.image }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />;
+  const remote = isUrl(b.image) ? b.image : null;
+  // Remember which URL failed, so a new image for the booking is tried again.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  if (remote && failedUrl !== remote) {
+    return (
+      <Image
+        source={{ uri: remote }}
+        style={StyleSheet.absoluteFill}
+        contentFit="cover"
+        transition={200}
+        onError={() => setFailedUrl(remote)}
+      />
+    );
   }
-  if (meta.photo) {
-    return <Image source={IMG[meta.photo]} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />;
-  }
-  const Icon = meta.icon;
   return (
-    <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-      <LinearGradient colors={G.hero} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
-      <Guilloche size={320} opacity={0.08} style={{ right: -140, top: -140 }} />
-      <Icon size={iconSize} color="rgba(255,255,255,0.35)" strokeWidth={1.6} />
-    </View>
+    <Image
+      source={IMG[meta.photo ?? GENERIC_VENUE_PHOTO]}
+      style={StyleSheet.absoluteFill}
+      contentFit="cover"
+      transition={200}
+    />
   );
 }
 
@@ -462,7 +475,7 @@ export function BookingHero({ b, onPress }: { b: Booking; onPress?: () => void }
       onPress={onPress}
       label={`Next check-in at ${bookingPlace(b)}`}
       role="button"
-      backdrop={<BookingBackdrop b={b} iconSize={64} />}
+      backdrop={<BookingBackdrop b={b} />}
       top={
         <Row between>
           <GlassChip icon={Icon} label={bookingKindLabel(b)} />
@@ -669,7 +682,7 @@ export function BookingRow({ b, onPress }: { b: Booking; onPress?: () => void })
     <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${bookingPlace(b)}, ${statusLabel(b.status)}`}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 12 }}>
         <View style={{ width: 62, height: 62, borderRadius: 16, overflow: 'hidden' }}>
-          <BookingBackdrop b={b} iconSize={22} />
+          <BookingBackdrop b={b} />
         </View>
         <View style={{ flex: 1, gap: 3 }}>
           <Txt v="bodyStrong" lines={1}>

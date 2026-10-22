@@ -216,7 +216,7 @@ function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} {...heroStatusBar}>
         {/* ---------- photo header ---------- */}
         <View style={{ height: 340 }}>
-          <BookingBackdrop b={b} iconSize={72} />
+          <BookingBackdrop b={b} />
           <LinearGradient
             colors={['rgba(1,27,39,0.45)', 'rgba(1,27,39,0)', 'rgba(1,27,39,0.75)']}
             locations={[0, 0.4, 1]}
