@@ -30,12 +30,7 @@ import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput, type Came
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
 import { useEnrollFace, useUpdateFace } from '@/features/auth/mutations';
-import {
-  type ReauthReason,
-  useDiscardNewMemberOnLeave,
-  useRefreshAfterFaceChange,
-  useRememberMemberPhoto,
-} from '@/features/family/hooks';
+import { type ReauthReason, useRefreshAfterFaceChange, useRememberMemberPhoto } from '@/features/family/hooks';
 import { uprightFrame } from '@/features/liveness/frame';
 import { hasReauthToken } from '@/services/reauth';
 
@@ -45,7 +40,8 @@ import { C } from '../theme';
 import { Button, IconCircle, Row } from '../ui';
 import { GlassPill, NightStage } from './family';
 
-export function FamilyPhotoCapture() {
+/** `onEnrolled`: the photo is saved — the route's discard-on-leave stands down. */
+export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) {
   const router = useRouter();
   const { name, age, personId, update, next, fresh } = useLocalSearchParams<{
     name?: string;
@@ -57,9 +53,8 @@ export function FamilyPhotoCapture() {
   }>();
   const isUpdate = update === '1' && !!personId;
   const inSetup = !isUpdate && next === 'document' && !!personId;
-  // Just created by Add member: leaving before the face enrolls removes them.
+  // Just created by Add member: their page goes under the document step.
   const fresh1 = inSetup && fresh === '1';
-  const discard = useDiscardNewMemberOnLeave(personId, fresh1);
   const { toast } = useToast();
 
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -168,7 +163,7 @@ export function FamilyPhotoCapture() {
         await enrollFace.mutateAsync({ selfieBase64, personId });
       }
       // Enrolled: leaving now must not remove the member.
-      discard.markDone();
+      onEnrolled?.();
       await rememberMemberPhoto(personId, filePath);
       refreshAfterFaceChange();
       await settleCameraThen(goToMemberDetail);

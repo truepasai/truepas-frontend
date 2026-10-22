@@ -713,15 +713,15 @@ export function CameraUnavailableView() {
   );
 }
 
-let familyPhotoCapture: ComponentType | null | undefined;
+let familyPhotoCapture: ComponentType<{ onEnrolled?: () => void }> | null | undefined;
 
 /** Lazy, guarded load of the premium under-5 photo camera — it statically
  *  imports react-native-vision-camera, which throws without NitroModules. */
-export function loadFamilyPhotoCapture(): ComponentType | null {
+export function loadFamilyPhotoCapture(): ComponentType<{ onEnrolled?: () => void }> | null {
   if (familyPhotoCapture === undefined) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy: throws without NitroModules
-      familyPhotoCapture = (require('./familyPhotoCapture') as { FamilyPhotoCapture: ComponentType }).FamilyPhotoCapture ?? null;
+      familyPhotoCapture = (require('./familyPhotoCapture') as { FamilyPhotoCapture: ComponentType<{ onEnrolled?: () => void }> }).FamilyPhotoCapture ?? null;
     } catch {
       familyPhotoCapture = null;
     }
