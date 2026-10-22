@@ -5,10 +5,10 @@
  * one photo under 5 — POST /face/enroll), step 3 the document, which the
  * backend then checks against that enrolled face (backend §1.2/§7.1:
  * verifying a photo document for a member without a face is rejected with
- * FACE_NOT_ENROLLED). The member page goes under the capture screen, so
- * backing out of a later step lands on it with "Continue setup" — but
- * backing out of the face step itself removes the new member again
- * (useDiscardNewMemberOnBack).
+ * FACE_NOT_ENROLLED). Leaving the face step before the face is enrolled
+ * removes the new member again (useDiscardNewMemberOnLeave); after it, the
+ * member page sits under the later steps, so backing out of them lands on
+ * it with "Continue setup".
  * A duplicate (same name + DOB) is caught here, before anything is created,
  * and so is an age that doesn't fit the relationship (relationshipAge.ts).
  * A Twin whose date of birth is more than a day from everyone's in the
@@ -70,14 +70,15 @@ export default function AddFamilyScreen() {
   const [twinDobCheck, setTwinDobCheck] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  /** Member page underneath, the face capture on top (step 2 of 3). */
+  /** The face capture replaces this form (step 2 of 3). No member page
+   *  underneath yet: leaving the capture before the face is enrolled removes
+   *  the member (`fresh`, useDiscardNewMemberOnLeave); once it's enrolled the
+   *  capture puts the member page under the document step. */
   const openFaceStep = (member: FamilyMember, name: string) => {
     const age = Number.isFinite(member.age) ? member.age : ageFromDob(dob);
     const mode = memberCaptureMode(member, ageFromDob(dob));
-    router.replace({ pathname: '/family/[id]', params: { id: member.id } });
-    router.push({
+    router.replace({
       pathname: mode === 'photo' ? '/family/add/photo-capture' : '/family/add/face-capture',
-      // `fresh`: backing out of this first capture removes the member again.
       params: { personId: member.id, name: name.split(' ')[0], age: String(age), next: 'document', fresh: '1' },
     });
   };
@@ -133,7 +134,12 @@ export default function AddFamilyScreen() {
           }
         }
       } catch {
-        // List unavailable — the create call below still rejects duplicates.
+        // List unavailable — the create call below still rejects duplicates,
+        // but nothing else checks a twin's birthday, so a Twin waits for it.
+        if (relationship === TWIN_RELATIONSHIP) {
+          setSubmitError("Couldn't check your family's birthdays for this twin. Check your connection and try again.");
+          return;
+        }
       }
 
       const member = await addMember.mutateAsync({ name: trimmed, dateOfBirth: dob, relationship });

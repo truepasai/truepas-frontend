@@ -32,7 +32,7 @@ import { useToast } from '@/components/composite/Toast';
 import { useEnrollFace, useUpdateFace } from '@/features/auth/mutations';
 import {
   type ReauthReason,
-  useDiscardNewMemberOnBack,
+  useDiscardNewMemberOnLeave,
   useRefreshAfterFaceChange,
   useRememberMemberPhoto,
 } from '@/features/family/hooks';
@@ -57,8 +57,9 @@ export function FamilyPhotoCapture() {
   }>();
   const isUpdate = update === '1' && !!personId;
   const inSetup = !isUpdate && next === 'document' && !!personId;
-  // Just created by Add member: backing out removes them again.
-  useDiscardNewMemberOnBack(personId, inSetup && fresh === '1');
+  // Just created by Add member: leaving before the face enrolls removes them.
+  const fresh1 = inSetup && fresh === '1';
+  const discard = useDiscardNewMemberOnLeave(personId, fresh1);
   const { toast } = useToast();
 
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -94,11 +95,15 @@ export function FamilyPhotoCapture() {
 
   const goToMemberDetail = () => {
     if (inSetup && personId) {
-      // Face first, document next (step 3 of 3).
-      router.replace({
-        pathname: '/family/add/document',
-        params: { personId, ...(name ? { name } : {}), ...(age ? { age } : {}) },
-      });
+      const docParams = { personId, ...(name ? { name } : {}), ...(age ? { age } : {}) };
+      // Face first, document next (step 3 of 3). A member fresh from Add
+      // member gets their page underneath now.
+      if (fresh1) {
+        router.replace({ pathname: '/family/[id]', params: { id: personId } });
+        router.push({ pathname: '/family/add/document', params: docParams });
+      } else {
+        router.replace({ pathname: '/family/add/document', params: docParams });
+      }
     } else if (personId) {
       // The member page sits under every entry to this screen — pop back to it.
       toast({ variant: 'success', title: isUpdate ? 'Face photo updated' : 'Face photo enrolled' });
@@ -162,6 +167,8 @@ export function FamilyPhotoCapture() {
       } else {
         await enrollFace.mutateAsync({ selfieBase64, personId });
       }
+      // Enrolled: leaving now must not remove the member.
+      discard.markDone();
       await rememberMemberPhoto(personId, filePath);
       refreshAfterFaceChange();
       await settleCameraThen(goToMemberDetail);

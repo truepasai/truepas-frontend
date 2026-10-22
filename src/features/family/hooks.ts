@@ -1,6 +1,5 @@
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
-import { useNavigation, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
@@ -85,8 +84,9 @@ export function useUpdateFamilyPermissions(personId: string) {
 export const TWIN_RELATIONSHIP = 'Twin';
 
 /** Twins look alike, so the kiosk asks them for their own check-in PIN. */
-export function isTwin(m: Pick<FamilyMember, 'relationship'> | null | undefined): boolean {
-  return m?.relationship?.trim().toLowerCase() === TWIN_RELATIONSHIP.toLowerCase();
+export function isTwin(m: Pick<FamilyMember, 'relationship' | 'isTwin'> | null | undefined): boolean {
+  if (m?.isTwin) return true;
+  return m?.relationship?.trim().replace(/\s+/g, ' ').toLowerCase() === TWIN_RELATIONSHIP.toLowerCase();
 }
 
 /** PUT /family/{id}/check-in-pin. `replace` sends the holder's PIN token. */
@@ -134,30 +134,36 @@ export function useRemoveFamilyMember() {
 
 /**
  * Add member creates the member before their face (POST /family on
- * Continue). Backing out of that first capture — back button, Android back
- * or swipe — removes them again and reopens the Add member form, so a
- * cancelled add leaves no half-made member. Forward moves (replace to the
- * document step, dismissTo the member page) aren't backs and pass through.
- * Best effort: if the delete fails, the member stays with "Continue setup".
+ * Continue) and replaces itself with the capture screen. If that screen goes
+ * away before the face is enrolled — back button, Android back, swipe or
+ * anything else — the member is removed again, so a cancelled add leaves no
+ * half-made member. Unmount, not a navigation event, is the trigger: it
+ * fires however the screen is left. Call `markDone()` before navigating on
+ * after a successful capture. Best effort: a failed delete leaves the member
+ * with "Continue setup".
  */
-export function useDiscardNewMemberOnBack(personId: string | undefined, enabled: boolean) {
-  const navigation = useNavigation();
-  const router = useRouter();
-  const { mutate: removeMember } = useRemoveFamilyMember();
-  const discarding = useRef(false);
-
+export function useDiscardNewMemberOnLeave(personId: string | undefined, enabled: boolean) {
+  const { mutateAsync: removeMember } = useRemoveFamilyMember();
+  const done = useRef(false);
+  const latest = useRef({ personId, enabled, removeMember });
   useEffect(() => {
-    if (!enabled || !personId) return;
-    return navigation.addListener('beforeRemove', (e) => {
-      const type = e.data.action.type;
-      if (discarding.current || (type !== 'GO_BACK' && type !== 'POP')) return;
-      e.preventDefault();
-      discarding.current = true;
-      removeMember(personId);
-      router.dismissTo('/(tabs)');
-      router.push('/family/add');
-    });
-  }, [enabled, personId, navigation, router, removeMember]);
+    latest.current = { personId, enabled, removeMember };
+  });
+
+  useEffect(
+    () => () => {
+      const { personId: id, enabled: on, removeMember: remove } = latest.current;
+      if (!on || !id || done.current) return;
+      remove(id).catch((err) => console.warn('[AddMember] could not remove the unfinished member', id, err));
+    },
+    [],
+  );
+
+  return {
+    markDone: () => {
+      done.current = true;
+    },
+  };
 }
 
 const memberPhotoKey = (personId: string) => ['member-photo', personId] as const;

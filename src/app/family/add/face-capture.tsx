@@ -24,7 +24,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { useToast } from '@/components/composite/Toast';
-import { type ReauthReason, useDiscardNewMemberOnBack, useMemberFaceUpdateGate } from '@/features/family/hooks';
+import { type ReauthReason, useDiscardNewMemberOnLeave, useMemberFaceUpdateGate } from '@/features/family/hooks';
 import { loadLivenessCamera } from '@/features/liveness/cameraModule';
 import { FaceRing } from '@/premium/blocks';
 import { CameraUnavailableView, GlassPill, GlassRow, NightStage } from '@/premium/flows/family';
@@ -68,8 +68,9 @@ export default function FamilyFaceCaptureScreen() {
   }>();
   const isUpdate = update === '1' && !!personId;
   const inSetup = !isUpdate && next === 'document' && !!personId;
-  // Just created by Add member: backing out removes them again.
-  useDiscardNewMemberOnBack(personId, inSetup && fresh === '1');
+  // Just created by Add member: leaving before the face enrolls removes them.
+  const fresh1 = inSetup && fresh === '1';
+  const discard = useDiscardNewMemberOnLeave(personId, fresh1);
   const pinVerified = useMemberFaceUpdateGate(isUpdate);
   const ageNum = age != null ? Number(age) : NaN;
   const allowBackCamera = Number.isFinite(ageNum) && ageNum < 10;
@@ -96,11 +97,16 @@ export default function FamilyFaceCaptureScreen() {
 
   const onEnrolled = () => {
     if (inSetup) {
-      // Face first, document next (step 3 of 3).
-      router.replace({
-        pathname: '/family/add/document',
-        params: { personId: personId!, ...(name ? { name } : {}), ...(age ? { age } : {}) },
-      });
+      discard.markDone();
+      const docParams = { personId: personId!, ...(name ? { name } : {}), ...(age ? { age } : {}) };
+      // Face first, document next (step 3 of 3). A member fresh from Add
+      // member gets their page underneath now.
+      if (fresh1) {
+        router.replace({ pathname: '/family/[id]', params: { id: personId! } });
+        router.push({ pathname: '/family/add/document', params: docParams });
+      } else {
+        router.replace({ pathname: '/family/add/document', params: docParams });
+      }
       return;
     }
     backToMember('Face enrolled');

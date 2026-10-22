@@ -118,6 +118,8 @@ export interface FamilyMember {
   /** Twins only: their own check-in PIN is set (PUT /family/{id}/check-in-pin).
    *  Proposed — absent until the backend ships it. */
   checkInPinSet?: boolean;
+  /** Backend's own twin flag (relationship tagged Twin, any case/spacing). */
+  isTwin?: boolean;
 }
 
 export interface FamilyPermissions {
