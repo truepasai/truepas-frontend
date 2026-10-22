@@ -71,8 +71,12 @@ setOnSessionExpired(() => {
 });
 
 function RootShell({ children }: { children: React.ReactNode }) {
-  const [fontsLoaded] = useTruepasFonts();
-  if (!fontsLoaded) {
+  const [fontsLoaded, fontError] = useTruepasFonts();
+  useEffect(() => {
+    if (fontError) console.warn('[Fonts] failed to load — using system fonts', fontError);
+  }, [fontError]);
+  // A font that fails to load must not hold the app on a blank screen.
+  if (!fontsLoaded && !fontError) {
     return <View style={{ flex: 1, backgroundColor: C.canvas }} />;
   }
 
