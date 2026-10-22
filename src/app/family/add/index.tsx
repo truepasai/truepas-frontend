@@ -11,7 +11,8 @@
  * and so is an age that doesn't fit the relationship (relationshipAge.ts).
  * A Twin whose date of birth is more than a day from everyone's in the
  * family (holder included) is confirmed first: "Check the date" or Continue
- * (the first of twin children has no twin added yet).
+ * (the first of twin children has no twin added yet). Once a twin is in
+ * the family, a new twin off their birthday is blocked.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
@@ -27,6 +28,7 @@ import {
   familyKeys,
   findMatchingMember,
   isDuplicateMemberError,
+  isTwin,
   memberCaptureMode,
   TWIN_RELATIONSHIP,
   useAddFamilyMember,
@@ -113,15 +115,19 @@ export default function AddFamilyScreen() {
           return;
         }
         // A twin shares a birthday (±1 day) with their twin: the holder or
-        // someone already in the family. The first of twin children has no
-        // twin here yet, so this asks instead of blocking.
-        if (
-          relationship === TWIN_RELATIONSHIP &&
-          !twinDobConfirmed &&
-          !sharesTwinBirthday(dob, [ownDob, ...list.map((m) => m.dateOfBirth)])
-        ) {
-          setTwinDobCheck(true);
-          return;
+        // someone already in the family. Once a twin is in the family, the
+        // next one must match a twin (or the holder) — that's a hard block.
+        // The first of twin children has no twin here yet, so that asks.
+        if (relationship === TWIN_RELATIONSHIP) {
+          const twins = list.filter(isTwin).map((m) => m.dateOfBirth);
+          if (twins.some(Boolean) && !sharesTwinBirthday(dob, [ownDob, ...twins])) {
+            setErrors({ dob: "Twins share a birthday — this doesn't match the twin in your family" });
+            return;
+          }
+          if (!twinDobConfirmed && !sharesTwinBirthday(dob, [ownDob, ...list.map((m) => m.dateOfBirth)])) {
+            setTwinDobCheck(true);
+            return;
+          }
         }
       } catch {
         // List unavailable — the create call below still rejects duplicates.
