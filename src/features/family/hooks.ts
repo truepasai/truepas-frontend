@@ -1,6 +1,7 @@
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useState } from 'react';
+import { useNavigation, useRouter } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
 import { api } from '@/api';
@@ -129,6 +130,34 @@ export function useRemoveFamilyMember() {
       queryClient.invalidateQueries({ queryKey: familyKeys.all });
     },
   });
+}
+
+/**
+ * Add member creates the member before their face (POST /family on
+ * Continue). Backing out of that first capture — back button, Android back
+ * or swipe — removes them again and reopens the Add member form, so a
+ * cancelled add leaves no half-made member. Forward moves (replace to the
+ * document step, dismissTo the member page) aren't backs and pass through.
+ * Best effort: if the delete fails, the member stays with "Continue setup".
+ */
+export function useDiscardNewMemberOnBack(personId: string | undefined, enabled: boolean) {
+  const navigation = useNavigation();
+  const router = useRouter();
+  const { mutate: removeMember } = useRemoveFamilyMember();
+  const discarding = useRef(false);
+
+  useEffect(() => {
+    if (!enabled || !personId) return;
+    return navigation.addListener('beforeRemove', (e) => {
+      const type = e.data.action.type;
+      if (discarding.current || (type !== 'GO_BACK' && type !== 'POP')) return;
+      e.preventDefault();
+      discarding.current = true;
+      removeMember(personId);
+      router.dismissTo('/(tabs)');
+      router.push('/family/add');
+    });
+  }, [enabled, personId, navigation, router, removeMember]);
 }
 
 const memberPhotoKey = (personId: string) => ['member-photo', personId] as const;

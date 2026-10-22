@@ -6,7 +6,9 @@
  * backend then checks against that enrolled face (backend §1.2/§7.1:
  * verifying a photo document for a member without a face is rejected with
  * FACE_NOT_ENROLLED). The member page goes under the capture screen, so
- * backing out of a later step lands on it with "Continue setup".
+ * backing out of a later step lands on it with "Continue setup" — but
+ * backing out of the face step itself removes the new member again
+ * (useDiscardNewMemberOnBack).
  * A duplicate (same name + DOB) is caught here, before anything is created,
  * and so is an age that doesn't fit the relationship (relationshipAge.ts).
  * A Twin whose date of birth is more than a day from everyone's in the
@@ -75,7 +77,8 @@ export default function AddFamilyScreen() {
     router.replace({ pathname: '/family/[id]', params: { id: member.id } });
     router.push({
       pathname: mode === 'photo' ? '/family/add/photo-capture' : '/family/add/face-capture',
-      params: { personId: member.id, name: name.split(' ')[0], age: String(age), next: 'document' },
+      // `fresh`: backing out of this first capture removes the member again.
+      params: { personId: member.id, name: name.split(' ')[0], age: String(age), next: 'document', fresh: '1' },
     });
   };
 

@@ -30,7 +30,12 @@ import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput, type Came
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
 import { useEnrollFace, useUpdateFace } from '@/features/auth/mutations';
-import { type ReauthReason, useRefreshAfterFaceChange, useRememberMemberPhoto } from '@/features/family/hooks';
+import {
+  type ReauthReason,
+  useDiscardNewMemberOnBack,
+  useRefreshAfterFaceChange,
+  useRememberMemberPhoto,
+} from '@/features/family/hooks';
 import { uprightFrame } from '@/features/liveness/frame';
 import { hasReauthToken } from '@/services/reauth';
 
@@ -42,15 +47,18 @@ import { GlassPill, NightStage } from './family';
 
 export function FamilyPhotoCapture() {
   const router = useRouter();
-  const { name, age, personId, update, next } = useLocalSearchParams<{
+  const { name, age, personId, update, next, fresh } = useLocalSearchParams<{
     name?: string;
     age?: string;
     personId?: string;
     update?: string;
     next?: string;
+    fresh?: string;
   }>();
   const isUpdate = update === '1' && !!personId;
   const inSetup = !isUpdate && next === 'document' && !!personId;
+  // Just created by Add member: backing out removes them again.
+  useDiscardNewMemberOnBack(personId, inSetup && fresh === '1');
   const { toast } = useToast();
 
   const { hasPermission, requestPermission } = useCameraPermission();

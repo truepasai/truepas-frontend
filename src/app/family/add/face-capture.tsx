@@ -24,7 +24,7 @@ import { useState } from 'react';
 import { View } from 'react-native';
 
 import { useToast } from '@/components/composite/Toast';
-import { type ReauthReason, useMemberFaceUpdateGate } from '@/features/family/hooks';
+import { type ReauthReason, useDiscardNewMemberOnBack, useMemberFaceUpdateGate } from '@/features/family/hooks';
 import { loadLivenessCamera } from '@/features/liveness/cameraModule';
 import { FaceRing } from '@/premium/blocks';
 import { CameraUnavailableView, GlassPill, GlassRow, NightStage } from '@/premium/flows/family';
@@ -58,15 +58,18 @@ const UPDATE_CHECKLIST: Item[] = [
 export default function FamilyFaceCaptureScreen() {
   const router = useRouter();
   const { toast } = useToast();
-  const { personId, name, age, update, next } = useLocalSearchParams<{
+  const { personId, name, age, update, next, fresh } = useLocalSearchParams<{
     personId?: string;
     name?: string;
     age?: string;
     update?: string;
     next?: string;
+    fresh?: string;
   }>();
   const isUpdate = update === '1' && !!personId;
   const inSetup = !isUpdate && next === 'document' && !!personId;
+  // Just created by Add member: backing out removes them again.
+  useDiscardNewMemberOnBack(personId, inSetup && fresh === '1');
   const pinVerified = useMemberFaceUpdateGate(isUpdate);
   const ageNum = age != null ? Number(age) : NaN;
   const allowBackCamera = Number.isFinite(ageNum) && ageNum < 10;
