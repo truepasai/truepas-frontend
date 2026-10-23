@@ -1,19 +1,22 @@
 {
-  "cli": {
-    "appVersionSource": "remote"
-  },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "simulator": true
       }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.dev.truepas.com/cb",
@@ -33,9 +36,14 @@
   "submit": {
     "production": {
       "ios": {
-        "appName": "TruePas",
-        "appleTeamId": "8B3HVD29A5"
+        "appleId": "contact@facepe.ai",
+        "ascAppId": "6788026146",
+        "appleTeamId": "8B3HVD29A5",
+        "sku": "EX1783349768789"
       }
     }
+  },
+  "cli": {
+    "appVersionSource": "remote"
   }
 }

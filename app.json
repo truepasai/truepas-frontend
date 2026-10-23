@@ -8,13 +8,13 @@
     "scheme": "truepasapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.truepas.truepasapp",
+      "bundleIdentifier": "com.facepeai.truepas",
       "config": {
         "usesNonExemptEncryption": false
       },
       "infoPlist": {
         "NSCameraUsageDescription": "Camera is required for document scanning and face recognition",
-        "NSPhotoLibraryUsageDescription": "Photo library access is needed to select documents",
+        "NSPhotoLibraryUsageDescription": "Photo library access lets you choose a profile picture or a document photo",
         "NSFaceIDUsageDescription": "Face ID is used to securely authenticate your identity"
       }
     },
@@ -86,6 +86,11 @@
       "router": {},
       "eas": {
         "projectId": "e1b66378-7754-4354-89d4-633ca8e89ebe"
+      },
+      "appStore": {
+        "bundleId": "com.facepeai.truepas",
+        "sku": "EX1783349768789",
+        "appleId": "6788026146"
       }
     },
     "owner": "facepeai"
