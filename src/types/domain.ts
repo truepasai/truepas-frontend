@@ -277,7 +277,38 @@ export type FaceLoginResult = AuthResponse | { resetToken: string; expiresIn: nu
 
 /** POST /auth/verify-pin — reauthToken (5 min, single use) authorizes PUT /face. */
 /** What a verify-pin reauth token is for (POST /auth/verify-pin `scope`). */
-export type PinScope = 'face_update' | 'check_in_pin_update';
+export type PinScope = 'face_update' | 'check_in_pin_update' | 'address_update';
+
+/** GET/POST/PUT /user/me/address (Oct 2026). One per customer; US addresses
+ *  come back standardized by Smarty, IN addresses as typed. */
+export type AddressCountry = 'US' | 'IN';
+
+export interface Address {
+  id: string;
+  line1: string;
+  line2: string | null;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: AddressCountry;
+}
+
+export interface AddressInput {
+  line1: string;
+  line2?: string;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: AddressCountry;
+}
+
+/** 400 ADDRESS_NOT_VERIFIED "Did you mean…?" — never carries line2. */
+export interface AddressSuggestion {
+  line1: string;
+  city: string;
+  state: string;
+  postal_code: string;
+}
 
 export interface VerifyPinResponse {
   ok: boolean;

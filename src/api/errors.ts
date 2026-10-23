@@ -17,6 +17,9 @@ export interface ApiError {
    *  ACCOUNT_LOCKED, ACCOUNT_EXISTS, REAUTH_REQUIRED, PIN_INVALID,
    *  TWO_FACTOR_INVALID, BOOKING_NOT_EDITABLE. Branch on this, never on text. */
   serverCode?: string;
+  /** The body's `error` field when it is a machine code. Address calls put
+   *  the real reason here (ADDRESS_NOT_VERIFIED…) and leave `code` generic. */
+  errorCode?: string;
   /** ISO time an ACCOUNT_LOCKED lock ends. */
   lockedUntil?: string;
   /** PIN_INVALID: tries left before PIN_LOCKED. */
@@ -36,16 +39,24 @@ const SERVER_CODE_MESSAGES: Record<string, string> = {
   BOOKING_NOT_EDITABLE: "This booking can't be changed any more.",
   RESERVATION_LIMIT: 'You have reached the limit of 50 upcoming reservations.',
   FAMILY_MEMBER_EXISTS: 'This family member has already been added.',
+  FACE_MISMATCH: "This face doesn't match the one registered for this person, so nothing was changed.",
+  FACE_NOT_DETECTED: "We couldn't find a face in the capture. Face the camera in good light and try again.",
+  FACE_ALREADY_ENROLLED: 'A face is already set up. Use Update face to change it.',
 };
 
-function minutesText(seconds: number): string {
-  const m = Math.max(1, Math.ceil(seconds / 60));
-  return `${m} minute${m === 1 ? '' : 's'}`;
+/** "15 minutes", "6 hours", "3 days" — the unit that reads naturally. */
+export function waitText(seconds: number): string {
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  if (minutes < 60) return plural(minutes, 'minute');
+  const hours = Math.ceil(seconds / 3600);
+  if (hours < 48) return plural(hours, 'hour');
+  return plural(Math.ceil(seconds / 86400), 'day');
 }
 
 /** Lock/limit text that includes the wait time when the backend sends one. */
 function lockMessage(serverCode: string | undefined, retryAfter: number | undefined): string | undefined {
-  const wait = retryAfter != null ? ` Try again in ${minutesText(retryAfter)}.` : ' Please wait and try again.';
+  const wait = retryAfter != null ? ` Try again in ${waitText(retryAfter)}.` : ' Please wait and try again.';
   switch (serverCode) {
     case 'ACCOUNT_LOCKED':
       return `Too many attempts.${wait}`;
@@ -53,6 +64,8 @@ function lockMessage(serverCode: string | undefined, retryAfter: number | undefi
       return `Too many wrong PINs.${wait}`;
     case 'FACE_LOGIN_LOCKED':
       return `Too many face sign-in attempts.${wait}`;
+    case 'FACE_UPDATE_LIMIT_REACHED':
+      return `Too many failed face updates.${wait}`;
     case 'TWO_FACTOR_LOCKED':
       return SERVER_CODE_MESSAGES.TWO_FACTOR_LOCKED;
     default:
@@ -127,6 +140,7 @@ export function toApiError(error: unknown): ApiError {
   const pick = (k: string) => data?.[k] ?? details?.[k];
 
   const serverCode = typeof data?.code === 'string' ? data.code : undefined;
+  const errorCode = typeof data?.error === 'string' && /^[A-Z][A-Z0-9_]+$/.test(data.error) ? data.error : undefined;
   const lockedUntil = typeof pick('locked_until') === 'string' ? (pick('locked_until') as string) : undefined;
   const attempts = pick('attempts_remaining');
   const attemptsRemaining = typeof attempts === 'number' ? attempts : undefined;
@@ -149,6 +163,7 @@ export function toApiError(error: unknown): ApiError {
     code: serverCode === 'REAUTH_REQUIRED' ? 'REAUTH_REQUIRED' : base.code,
     message,
     serverCode,
+    errorCode,
     lockedUntil,
     attemptsRemaining,
     retryAfterSeconds,

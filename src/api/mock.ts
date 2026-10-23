@@ -1,6 +1,10 @@
-import { setReauthToken, takeReauthToken } from '@/services/reauth';
+import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
+
+import { clearReauthToken, peekReauthToken, setReauthToken, takeReauthToken } from '@/services/reauth';
 import type {
     AccountDetailsRequest,
+    Address,
+    AddressInput,
     AccountDetailsResponse,
     ActivityItem,
     ActivityLogItem,
@@ -31,6 +35,7 @@ import type {
     TwoFactorStatusResponse,
     UpdateReservationRequest,
     UserStats,
+    PinScope,
     VerifyPinResponse,
     AddDocumentRequest,
     AddFamilyMemberRequest,
@@ -99,6 +104,20 @@ function fail(message: string): Promise<never> {
   return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), LATENCY_MS));
 }
 
+/** A failure shaped like an axios HTTP error, for flows that branch on the
+ *  status or the body (404 → add form, 400 → "Did you mean…?"). */
+function failHttp(status: number, data: Record<string, unknown>, headers: Record<string, string> = {}): Promise<never> {
+  const response = {
+    status,
+    statusText: '',
+    data,
+    headers,
+    config: { headers: new AxiosHeaders() },
+  } as AxiosResponse;
+  const error = new AxiosError(String(data.message ?? data.error ?? 'Request failed'), String(status), response.config, null, response);
+  return new Promise((_, reject) => setTimeout(() => reject(error), LATENCY_MS));
+}
+
 let uid = 100;
 const nextId = (prefix: string) => `${prefix}${uid++}`;
 
@@ -141,6 +160,44 @@ let appPrefs: AppPreferences = { language: 'en', region: null, faceCheckInEnable
 let pushDevices: PushDevice[] = [];
 const verificationLiveness = new Map<string, string | undefined>();
 let dataExport: DataExport | null = null;
+let address: Address | null = null;
+let addressUpdatedAt = 0;
+const ADDRESS_COOLDOWN_S = 15 * 86_400;
+
+/** Mimics Smarty: "nowhere" fails with no suggestion, ZIP 00000 fails with
+ *  one, anything else comes back standardized (title case, ZIP+4). */
+function checkMockAddress(input: AddressInput): Promise<never> | Address {
+  if (input.country === 'US') {
+    if (/nowhere/i.test(input.line1)) {
+      return failHttp(400, {
+        error: 'ADDRESS_NOT_VERIFIED',
+        message: 'The address could not be verified. Please check your street, city, state, and ZIP code and try again.',
+        issues: ['Street address could not be verified'],
+        suggestion: null,
+        fields: ['address'],
+      });
+    }
+    if (input.postal_code === '00000') {
+      return failHttp(400, {
+        error: 'ADDRESS_NOT_VERIFIED',
+        message: 'The address could not be verified. Please check your street, city, state, and ZIP code and try again.',
+        issues: ['City name does not match postal code'],
+        suggestion: { line1: '1600 Pennsylvania Ave NW', city: 'Washington', state: 'DC', postal_code: '20500-0005' },
+        fields: ['address'],
+      });
+    }
+  }
+  const title = (s: string) => s.trim().toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+  return {
+    id: address?.id ?? nextId('addr'),
+    line1: input.country === 'US' ? title(input.line1) : input.line1.trim(),
+    line2: input.line2?.trim() || null,
+    city: input.country === 'US' ? title(input.city) : input.city.trim(),
+    state: input.country === 'US' ? input.state.trim().toUpperCase() : input.state.trim(),
+    postal_code: input.country === 'US' && /^\d{5}$/.test(input.postal_code) ? `${input.postal_code}-0001` : input.postal_code,
+    country: input.country,
+  };
+}
 
 const SUPPORTED_TYPES: SupportedDocumentType[] = [
   { type: 'passport', label: 'Passport', selfieRequired: true, allowedForMinors: true, allowedForAdults: true, minAge: null, maxAge: null },
@@ -483,12 +540,12 @@ export const mockApi = {
     user = { ...user, pinChangedAt: new Date().toISOString() };
     return respond({ ok: true, message: 'PIN changed' });
   },
-  verifyPin: (pin: string): Promise<VerifyPinResponse> => {
+  verifyPin: (pin: string, scope?: PinScope): Promise<VerifyPinResponse> => {
     if (pin !== userPin) {
       return fail('Incorrect PIN');
     }
     setReauthToken('mock-reauth', 300);
-    return respond({ ok: true, reauthToken: 'mock-reauth', scope: 'face_update', expiresIn: 300 });
+    return respond({ ok: true, reauthToken: 'mock-reauth', scope: scope ?? 'face_update', expiresIn: 300 });
   },
   logout: (_payload: LogoutRequest): Promise<OkResponse> => {
     return respond({ ok: true });
@@ -507,6 +564,42 @@ export const mockApi = {
   updateProfile: (payload: UpdateProfileRequest): Promise<User> => {
     user = { ...user, ...payload };
     return respond(user);
+  },
+
+  // ── Address ──────────────────────────────────────────────────────────
+  getAddress: (): Promise<Address | null> => respond(address),
+  createAddress: (payload: AddressInput): Promise<Address> => {
+    if (address) return failHttp(409, { error: 'ADDRESS_ALREADY_EXISTS', message: 'An address already exists. Update it instead.' });
+    const checked = checkMockAddress(payload);
+    if (checked instanceof Promise) return checked;
+    address = checked;
+    return respond(address);
+  },
+  updateAddress: (payload: AddressInput): Promise<Address> => {
+    // Like the backend: the PIN token is only spent once the address saves.
+    if (!peekReauthToken()) {
+      return failHttp(403, { code: 'REAUTH_REQUIRED', message: 'PIN verification is required' });
+    }
+    if (!address) return failHttp(404, { error: 'ADDRESS_NOT_FOUND', message: 'No address to update. Add one first.' });
+    const waitS = Math.ceil((addressUpdatedAt + ADDRESS_COOLDOWN_S * 1000 - Date.now()) / 1000);
+    if (addressUpdatedAt && waitS > 0) {
+      const days = Math.ceil(waitS / 86_400);
+      return failHttp(
+        429,
+        {
+          error: 'ADDRESS_UPDATE_COOLDOWN',
+          message: `You can change your address once every 15 days. Try again in ${days} day${days === 1 ? '' : 's'}.`,
+          retry_after: waitS,
+        },
+        { 'retry-after': String(waitS) },
+      );
+    }
+    const checked = checkMockAddress(payload);
+    if (checked instanceof Promise) return checked;
+    clearReauthToken();
+    address = checked;
+    addressUpdatedAt = Date.now();
+    return respond(address);
   },
   biometricConsent: (payload: BiometricConsentRequest): Promise<OkResponse> => {
     biometricConsentAccepted = payload.accepted;

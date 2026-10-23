@@ -1,8 +1,12 @@
+import { isAxiosError } from 'axios';
+
 import { apiClient, getPreauthToken, getRegistrationToken, setRegistrationToken } from '@/api/client';
 import { deviceInfo } from '@/services/deviceInfo';
-import { setReauthToken, takeReauthToken } from '@/services/reauth';
+import { clearReauthToken, peekReauthToken, setReauthToken, takeReauthToken } from '@/services/reauth';
 import type {
     AccountDetailsRequest,
+    Address,
+    AddressInput,
     AccountDetailsResponse,
     ActivityItem,
     ActivityLogItem,
@@ -70,6 +74,9 @@ import type {
     VerifyOtpRequest,
     VerifyOtpResponse
 } from '@/types/domain';
+
+/** Address saves wait on Smarty, which can take up to ~30 s when slow. */
+const ADDRESS_TIMEOUT_MS = 45_000;
 
 /** "Oct 5, 10:04 AM" — activity times are ISO since Oct 2026 (§10.1). */
 function fmtActivityTime(iso: string | undefined): string {
@@ -444,7 +451,8 @@ export const realApi = {
    *  it is kept in services/reauth and consumed by updateFace. */
   verifyPin: async (pin: string, scope?: PinScope): Promise<VerifyPinResponse> => {
     // The token only works for its scope: face_update (the default) for
-    // PUT /face, check_in_pin_update for changing a twin's check-in PIN.
+    // PUT /face, check_in_pin_update for changing a twin's check-in PIN,
+    // address_update for PUT /user/me/address.
     const { data } = await apiClient.post<VerifyPinResponse>('/auth/verify-pin', scope ? { pin, scope } : { pin });
     if (data?.reauthToken) setReauthToken(data.reauthToken, data.expiresIn ?? 300);
     return data;
@@ -462,6 +470,35 @@ export const realApi = {
   updateProfile: async (payload: UpdateProfileRequest): Promise<User> => {
     const { data } = await apiClient.put<User>('/user/me', payload);
     return data;
+  },
+
+  // ── Address (Oct 2026: one per customer, US checked by Smarty) ───────
+  /** null = no address yet (404) → the screen shows the Add form. */
+  getAddress: async (): Promise<Address | null> => {
+    try {
+      const { data } = await apiClient.get<Address>('/user/me/address');
+      return data;
+    } catch (err) {
+      if (isAxiosError(err) && err.response?.status === 404) return null;
+      throw err;
+    }
+  },
+  /** First address — no PIN. 409 ADDRESS_ALREADY_EXISTS → use updateAddress. */
+  createAddress: async (payload: AddressInput): Promise<Address> => {
+    const { data } = await apiClient.post<Address>('/user/me/address', payload, { timeout: ADDRESS_TIMEOUT_MS });
+    return data;
+  },
+  /** Needs the address_update reauthToken from verifyPin. The server only
+   *  spends it when the address is saved, so it is read here and cleared on
+   *  success — a 400 ADDRESS_NOT_VERIFIED can retry with the same token. */
+  updateAddress: async (payload: AddressInput): Promise<Address> => {
+    const reauth = peekReauthToken();
+    const { data } = await apiClient.put<{ message?: string; address: Address }>('/user/me/address', payload, {
+      headers: reauth ? { 'X-Reauth-Token': reauth } : undefined,
+      timeout: ADDRESS_TIMEOUT_MS,
+    });
+    clearReauthToken();
+    return data.address;
   },
   biometricConsent: async (payload: BiometricConsentRequest): Promise<OkResponse> => {
     const { data } = await apiClient.post<OkResponse>('/user/me/biometric-consent', payload);

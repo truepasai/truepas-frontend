@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { View } from 'react-native';
 
 import { isMockApi } from '@/api';
+import { waitText } from '@/api/errors';
 import { MOCK_PIN } from '@/api/mock';
 import { PIN_LENGTH, usePinVerification } from '@/features/auth/usePinVerification';
 import { MEMBER_FACE_UPDATE_GUARD, type ReauthReason } from '@/features/family/hooks';
@@ -11,7 +12,9 @@ import { Keypad } from '@/premium/blocks';
 import { Banner, CodeInput } from '@/premium/kit';
 import { C } from '@/premium/theme';
 import { Button, Heading, Screen, TextLink, TopBar, Txt } from '@/premium/ui';
+import { cooldownKey, useCooldown } from '@/services/cooldowns';
 import { flowGuards } from '@/services/flowGuards';
+import { useAppSelector } from '@/store';
 
 /** Update face — PIN verification (PRD FR-04; backend §5: PUT /face needs
  *  the single-use, 5-minute reauthToken that POST /auth/verify-pin returns —
@@ -35,9 +38,15 @@ export default function FaceUpdatePinScreen() {
     reason?: ReauthReason;
   }>();
   const gate = usePinVerification();
-  const busy = gate.locked || gate.isPending;
+  // 3 failed updates in 24 h → 429 FACE_UPDATE_LIMIT_REACHED. Every Update
+  // face entry point lands here, so this is where the wait is enforced.
+  const accountId = useAppSelector((state) => state.auth.user?.id);
+  const limitLeft = useCooldown(accountId ? cooldownKey('face-update', accountId, personId ?? 'self') : null);
+  const limited = limitLeft > 0;
+  const busy = gate.locked || gate.isPending || limited;
 
   const handleComplete = async (value?: string) => {
+    if (limited) return;
     const code = await gate.submit(value);
     if (!code) return;
     // Replace on both paths: back from the capture screen returns to where
@@ -81,7 +90,7 @@ export default function FaceUpdatePinScreen() {
         <Button
           label="Verify"
           loading={gate.isPending}
-          disabled={gate.pin.length !== PIN_LENGTH || gate.locked}
+          disabled={gate.pin.length !== PIN_LENGTH || gate.locked || limited}
           onPress={() => void handleComplete()}
         />
       }>
@@ -102,13 +111,19 @@ export default function FaceUpdatePinScreen() {
         onChange={gate.setPin}
         onComplete={(v) => void handleComplete(v)}
         error={gate.error != null}
-        disabled={gate.locked}
+        disabled={gate.locked || limited}
         dots
         autoFocus={false}
         label="Current PIN"
       />
 
-      {gate.locked ? (
+      {limited ? (
+        <Banner
+          tone="error"
+          title="Face update paused"
+          body={`Too many failed face updates. Try again in ${waitText(limitLeft)}.`}
+        />
+      ) : gate.locked ? (
         <Banner
           tone="error"
           title="PIN locked"

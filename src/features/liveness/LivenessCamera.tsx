@@ -38,8 +38,10 @@ import {
 } from '@/premium/flows/face';
 import { uprightFrame } from '@/features/liveness/frame';
 import { useLivenessSession } from '@/features/liveness/useLivenessSession';
+import { clearCooldown, cooldownKey, setCooldown } from '@/services/cooldowns';
 import { flowGuards } from '@/services/flowGuards';
 import { hasReauthToken } from '@/services/reauth';
+import { useAppSelector } from '@/store';
 import { useThemeTokens } from '@/theme';
 import { errorHaptic, successHaptic, tapHaptic } from '@/services/haptics';
 
@@ -130,6 +132,12 @@ export function LivenessCamera({
   // single use — after a failed update, a retry needs the PIN again.
   const [pinSpent, setPinSpent] = useState(false);
   const reauthGated = mode === 'update' && !!onReauthRequired;
+  // Failures a new attempt can't fix: 429 FACE_UPDATE_LIMIT_REACHED (3
+  // failed updates in 24 h) or 409 FACE_ALREADY_ENROLLED on enroll. The
+  // failed screen then offers Done instead of Try again / PIN again.
+  const [deadEnd, setDeadEnd] = useState(false);
+  const accountId = useAppSelector((state) => state.auth.user?.id);
+  const faceLimitKey = accountId ? cooldownKey('face-update', accountId, personId ?? 'self') : null;
 
   // Under-10 members may flip to the rear camera (parent holds the phone);
   // everyone else stays front-only per the age-band spec.
@@ -494,6 +502,8 @@ export function LivenessCamera({
           return;
         }
         await updateFace.mutateAsync(facePayload);
+        // A successful update resets the server's failed-attempt count.
+        if (faceLimitKey) clearCooldown(faceLimitKey);
         // Family member face update: the new frame replaces their avatar too.
         if (personId && capturedUri.current) {
           await rememberMemberPhoto(personId, capturedUri.current);
@@ -504,15 +514,28 @@ export function LivenessCamera({
       await settleCameraThen(onSuccess);
     } catch (err: any) {
       console.error('[Liveness] Face enrollment failed:', err?.message);
+      const apiErr = toApiError(err);
       if (mode === 'update') {
         // 403 REAUTH_REQUIRED (no, expired or used PIN token): straight back
         // to the PIN step with a short explanation, not a generic failure.
-        if (reauthGated && toApiError(err).code === 'REAUTH_REQUIRED') {
+        if (reauthGated && apiErr.code === 'REAUTH_REQUIRED') {
           await settleCameraThen(() => onReauthRequired?.('expired'));
           return;
         }
-        // Any other failed PUT /face still used the token up (§5).
+        // 403 FACE_MISMATCH / 422 FACE_NOT_DETECTED (and any other failure)
+        // used up both the PIN token and the liveness session: a retry needs
+        // the PIN again and a new capture.
         setPinSpent(true);
+        if (apiErr.serverCode === 'FACE_UPDATE_LIMIT_REACHED') {
+          // Remembered so the PIN step stays closed until the wait is over.
+          if (faceLimitKey) setCooldown(faceLimitKey, apiErr.retryAfterSeconds ?? 24 * 3600);
+          setDeadEnd(true);
+        }
+      } else if (apiErr.serverCode === 'FACE_ALREADY_ENROLLED') {
+        // Someone (another device, an earlier try) already enrolled this
+        // face — refresh so the app shows Update face from now on.
+        refreshAfterFaceChange();
+        setDeadEnd(true);
       }
       // The liveness session is single-use — consumed whether enroll
       // succeeded or not — so the failed screen's Try Again starts a NEW
@@ -535,6 +558,7 @@ export function LivenessCamera({
     reauthGated,
     settleCameraThen,
     failWithCooldown,
+    faceLimitKey,
   ]);
 
   // Finalizing starts right after the last step — often a head turn — so the
@@ -724,9 +748,11 @@ export function LivenessCamera({
       <LivenessResultStage
         outcome="failed"
         error={liveness.error}
-        primaryLabel={needsPin ? 'Enter PIN again' : cooldownLeft > 0 ? `Try again in ${cooldownLeft}s` : 'Try again'}
-        primaryDisabled={!needsPin && cooldownLeft > 0}
-        onPrimary={() => (needsPin ? onReauthRequired?.('retry') : liveness.reset())}
+        primaryLabel={
+          deadEnd ? 'Done' : needsPin ? 'Enter PIN again' : cooldownLeft > 0 ? `Try again in ${cooldownLeft}s` : 'Try again'
+        }
+        primaryDisabled={!deadEnd && !needsPin && cooldownLeft > 0}
+        onPrimary={() => (deadEnd ? router.back() : needsPin ? onReauthRequired?.('retry') : liveness.reset())}
         onBack={() => router.back()}
       />
     );
