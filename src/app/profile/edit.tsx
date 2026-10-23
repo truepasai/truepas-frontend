@@ -3,15 +3,16 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { AtSign, Camera, Lock, MapPin, Phone, User } from 'lucide-react-native';
 import { useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
 
 import { toApiError } from '@/api/errors';
+import { addressLines, useAddress } from '@/features/address/hooks';
 import { useUpdateProfile } from '@/features/auth/mutations';
 import { useProfilePicture, useUploadProfilePicture } from '@/features/profile/hooks';
 import { useToast } from '@/hooks/useToast';
 import { DateField } from '@/premium/flows/account';
 import { C } from '@/premium/theme';
-import { Avatar, Button, Field, Row, Screen, TextLink, TopBar, Txt } from '@/premium/ui';
+import { Avatar, Button, Card, Field, go, ListRow, Row, Screen, TextLink, TopBar, Txt } from '@/premium/ui';
 import { useAppSelector } from '@/store';
 
 function todayIso(): string {
@@ -20,7 +21,8 @@ function todayIso(): string {
 }
 
 /**
- * Edit profile — PUT /user/me only accepts { fullName, dateOfBirth, address }.
+ * Edit profile — PUT /user/me { fullName, dateOfBirth }. The address row
+ * opens /profile/address (its own endpoint, Smarty check and PIN).
  * Email & phone are server-locked (409 until re-verification), so they render
  * read-only with a lock affordance. (The mockup locked the name and opened
  * contact fields — the API contract wins.)
@@ -45,7 +47,8 @@ export default function EditProfileScreen() {
       ? `${raw.slice(6)}-${raw.slice(0, 2)}-${raw.slice(3, 5)}`
       : raw;
   });
-  const [address, setAddress] = useState(user?.address ?? '');
+  // The address has its own endpoint, PIN and screen (/profile/address).
+  const savedAddress = useAddress();
 
   const canSave = !!fullName.trim();
 
@@ -55,7 +58,6 @@ export default function EditProfileScreen() {
       await updateProfile.mutateAsync({
         fullName: fullName.trim(),
         dateOfBirth: dateOfBirth || undefined,
-        address: address.trim() || undefined,
       });
       toast.show('success', 'Profile updated');
       router.back();
@@ -75,14 +77,9 @@ export default function EditProfileScreen() {
   const handlePickPhoto = async () => {
     if (isUploading) return;
     try {
-      // Android uses the system photo picker — no storage permission needed.
-      if (Platform.OS === 'ios') {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') {
-          toast.show('error', 'Photo access is needed to upload a profile picture.');
-          return;
-        }
-      }
+      // No permission request: both platforms open a system picker that runs
+      // outside the app, so it needs no library access. Asking anyway blocked
+      // users who had once tapped "Don't Allow" — iOS never asks again.
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: true,
@@ -180,15 +177,26 @@ export default function EditProfileScreen() {
           placeholder="Date of birth"
           maxDate={todayIso()}
         />
-        <Field
-          label="Address"
-          icon={MapPin}
-          value={address}
-          onChangeText={setAddress}
-          placeholder="1 Example Street, Orlando, FL"
-          hint="Optional — used for venue pre-fill."
-          inputProps={{ maxLength: 1000, autoComplete: 'street-address' }}
-        />
+        <View style={{ gap: 8 }}>
+          <Txt v="smallStrong" color={C.ink2}>
+            Address
+          </Txt>
+          <Card pad={0} style={{ paddingHorizontal: 16 }}>
+            <ListRow
+              icon={MapPin}
+              tone="sky"
+              title={savedAddress.data ? addressLines(savedAddress.data)[0] : 'Add your address'}
+              sub={
+                savedAddress.data
+                  ? addressLines(savedAddress.data)[1]
+                  : savedAddress.isPending
+                    ? 'Loading…'
+                    : 'Verified with the postal service for US addresses'
+              }
+              onPress={go('/profile/address')}
+            />
+          </Card>
+        </View>
         <Field label="Email" icon={AtSign} value={user?.email ?? ''} editable={false} right={lock} />
         <Field label="Phone" icon={Phone} value={user?.phone ?? ''} editable={false} right={lock} />
       </View>

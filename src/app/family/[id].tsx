@@ -32,7 +32,7 @@ import {
   UserX,
 } from 'lucide-react-native';
 import { useCallback, useRef, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toApiError } from '@/api/errors';
@@ -129,7 +129,14 @@ export default function FamilyMemberScreen() {
     else if (r === 'saved-local')
       toast({ variant: 'warning', title: 'Photo saved on this phone', description: "We couldn't upload it. Try again later." });
     else if (r === 'denied')
-      toast({ variant: 'error', title: source === 'camera' ? 'Camera access is needed' : 'Photo access is needed' });
+      // Only the camera asks for permission. Once refused, iOS never asks
+      // again, so the way forward is the app's page in Settings.
+      toast({
+        variant: 'error',
+        title: 'Camera access is needed',
+        description: 'Turn on Camera for TruePas in Settings, or choose a photo from your library.',
+        action: { label: 'Open Settings', onPress: () => void Linking.openSettings() },
+      });
     else if (r === 'failed') toast({ variant: 'error', title: "Couldn't add the photo" });
   };
 

@@ -20,6 +20,8 @@ export interface ToastOptions {
   description?: string;
   /** ms; default 4000 */
   duration?: number;
+  /** One inline button, e.g. "Open Settings" after a denied permission. */
+  action?: { label: string; onPress: () => void };
 }
 
 interface ToastContextValue {
@@ -34,6 +36,7 @@ interface ActiveToast extends Required<Pick<ToastOptions, "title">> {
   variant: ToastVariant;
   description?: string;
   duration: number;
+  action?: ToastOptions["action"];
 }
 
 /** Mount once near the app root; call useToast().toast({...}) anywhere inside. */
@@ -44,10 +47,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const toast = useCallback((t: ToastOptions) => {
     const id = ++nextId.current;
-    setItems((items) => [
-      ...items.slice(-2), // keep at most 3 visible
-      { id, variant: t.variant ?? "default", title: t.title, description: t.description, duration: t.duration ?? 4000 },
-    ]);
+    const variant = t.variant ?? "default";
+    setItems((items) => {
+      // Repeated taps on a failing action must not stack identical toasts.
+      if (items.some((i) => i.variant === variant && i.title === t.title && i.description === t.description)) {
+        return items;
+      }
+      return [
+        ...items.slice(-2), // keep at most 3 visible
+        { id, variant, title: t.title, description: t.description, duration: t.duration ?? 4000, action: t.action },
+      ];
+    });
   }, []);
 
   const dismiss = useCallback((id: number) => {
@@ -102,6 +112,19 @@ function ToastCard({ toast, onDismiss }: { toast: ActiveToast; onDismiss: () => 
       <View style={styles.body}>
         <Text style={styles.title}>{toast.title}</Text>
         {toast.description ? <Text style={styles.description}>{toast.description}</Text> : null}
+        {toast.action ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              toast.action?.onPress();
+              onDismiss();
+            }}
+            hitSlop={8}
+            style={styles.action}
+          >
+            <Text style={styles.actionLabel}>{toast.action.label}</Text>
+          </Pressable>
+        ) : null}
       </View>
       <Pressable accessibilityLabel="Dismiss" onPress={onDismiss} hitSlop={8}>
         <X size={iconSize.sm} color={theme.colors.textMuted} />
@@ -141,4 +164,6 @@ const useStyles = makeStyles((t) => ({
   body: { flex: 1 },
   title: { fontSize: t.fontSize.base, fontWeight: t.fontWeight.medium, color: t.colors.textPrimary },
   description: { fontSize: t.fontSize.sm, color: t.colors.textSecondary, marginTop: t.spacing[0.5] },
+  action: { alignSelf: "flex-start", marginTop: t.spacing[2] },
+  actionLabel: { fontSize: t.fontSize.sm, fontWeight: t.fontWeight.semibold, color: t.colors.actionPrimary },
 }));

@@ -1,7 +1,6 @@
 import { type QueryClient, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
@@ -242,12 +241,10 @@ export function useSetMemberPhoto(personId: string) {
     if (busy) return 'cancelled';
     setBusy(true);
     try {
+      // The library opens a system picker that runs outside the app, so it
+      // needs no permission; only the camera does.
       if (source === 'camera') {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
-        if (status !== 'granted') return 'denied';
-      } else if (Platform.OS === 'ios') {
-        // Android uses the system photo picker — no storage permission needed.
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== 'granted') return 'denied';
       }
       const options: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 };
