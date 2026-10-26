@@ -146,7 +146,7 @@ export function LinkRow({ prompt, label, onPress }: { prompt?: string; label: st
 
 /* ───────────────────────── bottom sheet ───────────────────────── */
 
-function Sheet({
+export function Sheet({
   visible,
   onClose,
   title,

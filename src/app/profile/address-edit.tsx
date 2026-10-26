@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { Building2, Hash, Map as MapIcon, MapPin } from 'lucide-react-native';
+import { Building2, Globe, Hash, Landmark, Map as MapIcon, MapPin } from 'lucide-react-native';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, View } from 'react-native';
 
@@ -20,10 +20,19 @@ import {
   useSaveAddress,
   validateAddress,
 } from '@/features/address/hooks';
+import { OptionPicker, type PickerOption } from '@/features/address/OptionPicker';
+import {
+  ADDRESS_COUNTRIES,
+  flagOf,
+  INDIAN_STATES,
+  isSupportedCountry,
+  normalizeState,
+  US_STATES,
+} from '@/features/address/regions';
 import { useAddressAutofill } from '@/features/address/useAddressAutofill';
 import { Banner } from '@/premium/kit';
 import { C } from '@/premium/theme';
-import { Button, Card, Chip, Field, Row, Screen, TopBar, Txt } from '@/premium/ui';
+import { Button, Card, Field, Screen, TopBar, Txt } from '@/premium/ui';
 import { cooldownKey, setCooldown, useCooldown } from '@/services/cooldowns';
 import type { PlacePrediction } from '@/services/places';
 import { hasReauthToken } from '@/services/reauth';
@@ -31,6 +40,16 @@ import { useAppSelector } from '@/store';
 import type { Address, AddressCountry, AddressInput, AddressSuggestion } from '@/types/domain';
 
 const FIELDS: AddressField[] = ['line1', 'line2', 'city', 'state', 'postal_code'];
+
+// Every country is listed; only the ones the backend saves can be picked.
+const COUNTRY_OPTIONS: PickerOption[] = ADDRESS_COUNTRIES.map((c) => ({
+  value: c.code,
+  label: c.name,
+  leading: flagOf(c.code),
+  disabledNote: isSupportedCountry(c.code) ? undefined : 'Coming soon',
+}));
+const US_STATE_OPTIONS: PickerOption[] = US_STATES.map((s) => ({ value: s.code, label: s.name, detail: s.code }));
+const IN_STATE_OPTIONS: PickerOption[] = INDIAN_STATES.map((s) => ({ value: s.name, label: s.name, detail: s.code }));
 const FIFTEEN_DAYS_S = 15 * 86_400;
 
 /**
@@ -80,7 +99,8 @@ export default function AddressEditScreen() {
   const setCountry = (country: AddressCountry) => {
     if (country === input.country) return;
     autofill.clear();
-    setInput((prev) => ({ ...prev, country }));
+    // State values differ per country (US code vs India name): pick again.
+    setInput((prev) => ({ ...prev, country, state: '' }));
     setErrors({});
     setFailure(null);
   };
@@ -93,7 +113,7 @@ export default function AddressEditScreen() {
       toast({ variant: 'error', title: "Couldn't fill in that address", description: 'Type the rest of it in, or pick it again.' });
       return;
     }
-    setInput((prev) => ({ ...prev, ...filled }));
+    setInput((prev) => ({ ...prev, ...filled, state: normalizeState(prev.country, filled.state) }));
     setErrors({});
     setFailure(null);
   };
@@ -171,15 +191,15 @@ export default function AddressEditScreen() {
       }>
       <FailureBanner failure={failure} busy={busy} onUseSuggestion={applySuggestion} onContinueToPin={() => toPin(input)} />
 
-      <View style={{ gap: 8 }}>
-        <Txt v="smallStrong" color={C.ink2}>
-          Country
-        </Txt>
-        <Row gap={8}>
-          <Chip label="United States" active={isUS} onPress={busy ? undefined : () => setCountry('US')} />
-          <Chip label="India" active={!isUS} onPress={busy ? undefined : () => setCountry('IN')} />
-        </Row>
-      </View>
+      <OptionPicker
+        label="Country"
+        icon={Globe}
+        value={input.country}
+        options={COUNTRY_OPTIONS}
+        onChange={(code) => isSupportedCountry(code) && setCountry(code)}
+        searchPlaceholder="Search countries"
+        disabled={busy}
+      />
 
       <Field
         label="Street address"
@@ -219,36 +239,30 @@ export default function AddressEditScreen() {
         editable={!busy}
         inputProps={{ maxLength: 100, textContentType: 'addressCity', autoCapitalize: 'words' }}
       />
-      <Row gap={12} style={{ alignItems: 'flex-start' }}>
-        <View style={{ flex: 1 }}>
-          <Field
-            label="State"
-            value={input.state}
-            onChangeText={set('state')}
-            error={errors.state}
-            placeholder={isUS ? 'FL' : 'Maharashtra'}
-            editable={!busy}
-            inputProps={{
-              maxLength: isUS ? 2 : 60,
-              autoCapitalize: isUS ? 'characters' : 'words',
-              textContentType: 'addressState',
-            }}
-          />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Field
-            label={isUS ? 'ZIP code' : 'PIN code'}
-            icon={Hash}
-            value={input.postal_code}
-            onChangeText={set('postal_code')}
-            error={errors.postal_code}
-            placeholder={isUS ? '32836' : '400001'}
-            keyboardType={isUS ? 'numbers-and-punctuation' : 'number-pad'}
-            editable={!busy}
-            inputProps={{ maxLength: isUS ? 10 : 6, autoComplete: 'postal-code', textContentType: 'postalCode' }}
-          />
-        </View>
-      </Row>
+      {/* A list, not free text: the backend only takes these exact values
+          (US 2-letter code, India's state/UT name). */}
+      <OptionPicker
+        label={isUS ? 'State' : 'State / union territory'}
+        icon={Landmark}
+        value={input.state}
+        options={isUS ? US_STATE_OPTIONS : IN_STATE_OPTIONS}
+        onChange={set('state')}
+        placeholder={isUS ? 'Select a state' : 'Select a state or UT'}
+        searchPlaceholder="Search states"
+        error={errors.state}
+        disabled={busy}
+      />
+      <Field
+        label={isUS ? 'ZIP code' : 'PIN code'}
+        icon={Hash}
+        value={input.postal_code}
+        onChangeText={set('postal_code')}
+        error={errors.postal_code}
+        placeholder={isUS ? '32836' : '400001'}
+        keyboardType={isUS ? 'numbers-and-punctuation' : 'number-pad'}
+        editable={!busy}
+        inputProps={{ maxLength: isUS ? 10 : 6, autoComplete: 'postal-code', textContentType: 'postalCode' }}
+      />
 
       <Txt v="small" color={C.ink3}>
         {isUS
