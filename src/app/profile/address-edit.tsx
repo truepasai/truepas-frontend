@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Building2, Hash, Map as MapIcon, MapPin } from 'lucide-react-native';
 import { useState } from 'react';
-import { View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
 
 import { waitText } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
@@ -20,10 +20,12 @@ import {
   useSaveAddress,
   validateAddress,
 } from '@/features/address/hooks';
+import { useAddressAutofill } from '@/features/address/useAddressAutofill';
 import { Banner } from '@/premium/kit';
 import { C } from '@/premium/theme';
 import { Button, Card, Chip, Field, Row, Screen, TopBar, Txt } from '@/premium/ui';
 import { cooldownKey, setCooldown, useCooldown } from '@/services/cooldowns';
+import type { PlacePrediction } from '@/services/places';
 import { hasReauthToken } from '@/services/reauth';
 import { useAppSelector } from '@/store';
 import type { Address, AddressCountry, AddressInput, AddressSuggestion } from '@/types/domain';
@@ -34,14 +36,14 @@ const FIFTEEN_DAYS_S = 15 * 86_400;
 /**
  * Add (POST, no PIN) or change (PUT + address_update PIN token) the address.
  * Every backend outcome has a place to land:
- * - 400 ADDRESS_NOT_VERIFIED â†’ message, issues, and "Did you meanâ€¦?" with a
+ * - 400 ADDRESS_NOT_VERIFIED → message, issues, and "Did you mean…?" with a
  *   one-tap resubmit (keeps the typed line2; never resubmits on its own).
- * - 409 on POST â†’ an address exists: continue to the PIN + PUT flow.
- * - 404 on PUT â†’ none exists: the same input goes out as a POST.
- * - 429 â†’ 15-day cooldown: message, Save disabled until retry_after.
- * - 403 REAUTH_REQUIRED â†’ back to the PIN step; the input is kept.
- * - 503 / timeout â†’ "try again shortly", input kept.
- * - 422 â†’ the field the server named.
+ * - 409 on POST → an address exists: continue to the PIN + PUT flow.
+ * - 404 on PUT → none exists: the same input goes out as a POST.
+ * - 429 → 15-day cooldown: message, Save disabled until retry_after.
+ * - 403 REAUTH_REQUIRED → back to the PIN step; the input is kept.
+ * - 503 / timeout → "try again shortly", input kept.
+ * - 422 → the field the server named.
  */
 export default function AddressEditScreen() {
   const router = useRouter();
@@ -51,7 +53,7 @@ export default function AddressEditScreen() {
   const params = useLocalSearchParams<{ mode?: 'create' | 'update' }>();
 
   const [mode, setMode] = useState<'create' | 'update'>(params.mode === 'update' ? 'update' : 'create');
-  // Changing an address only works with a fresh PIN check â€” checked once on
+  // Changing an address only works with a fresh PIN check — checked once on
   // entry, like the face update camera.
   const [pinVerified] = useState(() => params.mode !== 'update' || hasReauthToken());
   const [input, setInput] = useState<AddressInput>(() => {
@@ -66,6 +68,8 @@ export default function AddressEditScreen() {
   const key = user ? cooldownKey('address-update', user.id) : null;
   const cooldownLeft = useCooldown(mode === 'update' ? key : null);
 
+  const autofill = useAddressAutofill(input.country);
+
   if (!pinVerified) return <Redirect href="/profile/address-pin" />;
 
   const isUS = input.country === 'US';
@@ -75,7 +79,21 @@ export default function AddressEditScreen() {
   };
   const setCountry = (country: AddressCountry) => {
     if (country === input.country) return;
+    autofill.clear();
     setInput((prev) => ({ ...prev, country }));
+    setErrors({});
+    setFailure(null);
+  };
+
+  // Picking a suggestion fills street, city, state and ZIP; the typed line2
+  // and the chosen country stay. Saving still runs the backend's check.
+  const pickPlace = async (prediction: PlacePrediction) => {
+    const filled = await autofill.pick(prediction);
+    if (!filled) {
+      toast({ variant: 'error', title: "Couldn't fill in that address", description: 'Type the rest of it in, or pick it again.' });
+      return;
+    }
+    setInput((prev) => ({ ...prev, ...filled }));
     setErrors({});
     setFailure(null);
   };
@@ -140,7 +158,7 @@ export default function AddressEditScreen() {
         <View style={{ gap: 10 }}>
           {busy && (
             <Txt v="small" color={C.ink3} center>
-              Checking the addressâ€¦ this can take a few seconds.
+              Checking the address… this can take a few seconds.
             </Txt>
           )}
           <Button
@@ -167,12 +185,20 @@ export default function AddressEditScreen() {
         label="Street address"
         icon={MapPin}
         value={input.line1}
-        onChangeText={set('line1')}
+        onChangeText={(v) => {
+          set('line1')(v);
+          autofill.search(v);
+        }}
+        // Late, so a tap on a suggestion lands before the list goes.
+        onBlur={() => setTimeout(autofill.clear, 250)}
         error={errors.line1}
-        placeholder={isUS ? '9214 Hanging Vine Ct' : '12 MG Road'}
-        editable={!busy}
+        placeholder={isUS ? 'Start typing your address' : '12 MG Road'}
+        hint={autofill.enabled ? 'Pick your address from the list to fill in the rest.' : undefined}
+        editable={!busy && !autofill.picking}
+        right={autofill.picking ? <ActivityIndicator size="small" color={C.ink3} /> : undefined}
         inputProps={{ maxLength: 200, autoComplete: 'address-line1', textContentType: 'streetAddressLine1', autoCapitalize: 'words' }}
       />
+      {autofill.items.length > 0 && <PlaceSuggestions items={autofill.items} onPick={(p) => void pickPlace(p)} />}
       <Field
         label="Apt, suite, unit (optional)"
         icon={Building2}
@@ -233,6 +259,44 @@ export default function AddressEditScreen() {
   );
 }
 
+function PlaceSuggestions({ items, onPick }: { items: PlacePrediction[]; onPick: (p: PlacePrediction) => void }) {
+  return (
+    <Card pad={0} style={{ marginTop: -10, paddingHorizontal: 16, paddingVertical: 4 }}>
+      {items.map((p, i) => (
+        <Pressable
+          key={p.placeId}
+          onPress={() => onPick(p)}
+          accessibilityRole="button"
+          accessibilityLabel={`${p.main}, ${p.secondary}`}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            paddingVertical: 12,
+            borderTopWidth: i ? 1 : 0,
+            borderTopColor: C.lineSoft,
+          }}>
+          <MapPin size={16} color={C.ink3} />
+          <View style={{ flex: 1 }}>
+            <Txt v="bodyStrong" lines={1}>
+              {p.main}
+            </Txt>
+            {!!p.secondary && (
+              <Txt v="small" lines={1}>
+                {p.secondary}
+              </Txt>
+            )}
+          </View>
+        </Pressable>
+      ))}
+      {/* Google requires attribution next to Places results shown off a map. */}
+      <Txt v="small" color={C.ink4} style={{ textAlign: 'right', paddingVertical: 8 }}>
+        Powered by Google
+      </Txt>
+    </Card>
+  );
+}
+
 function FailureBanner({
   failure,
   busy,
@@ -252,13 +316,13 @@ function FailureBanner({
           <Banner
             tone="error"
             title="We couldn't verify this address"
-            body={[failure.message, ...failure.issues.map((i) => `â€¢ ${i}`)].join('\n')}
+            body={[failure.message, ...failure.issues.map((i) => `• ${i}`)].join('\n')}
           />
           {failure.suggestion && (
             <Card>
               <View style={{ gap: 10 }}>
                 <Txt v="smallStrong" color={C.ink2}>
-                  Did you meanâ€¦?
+                  Did you mean…?
                 </Txt>
                 {addressLines({ ...failure.suggestion, line2: null }).map((line) => (
                   <Txt key={line} v="bodyStrong">

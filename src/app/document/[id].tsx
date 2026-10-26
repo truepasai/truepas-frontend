@@ -69,8 +69,9 @@ export default function DocumentDetailScreen() {
   const [showDob, setShowDob] = useState(false);
 
   // Local copy of the capture (keyed by docId, saved at scan time): Regula's
-  // cropped document, shown first. The server's front is the full camera
-  // frame sent for verification (desk and all), only the fallback.
+  // cropped document, shown first. Then the server's documentImageUrl (a
+  // cropped image, null until the backend stores one); the server's front is
+  // the full camera frame sent for verification (desk and all), last resort.
   useEffect(() => {
     if (!id) return;
     let alive = true;
@@ -210,7 +211,10 @@ export default function DocumentDetailScreen() {
                   <FlipCard
                     flipped={isFlipped}
                     height={CARD_H}
-                    scanUri={scanImageUri ?? serverFront}
+                    // This phone's cropped scan, then the server's cropped
+                    // document image (documentImageUrl, once the backend
+                    // stores it), and only then the raw camera frame.
+                    scanUri={scanImageUri || d.documentImageUrl || serverFront}
                     noScan={
                       !localChecked || imagesQuery.isPending ? (
                         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
