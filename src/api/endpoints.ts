@@ -21,6 +21,7 @@ import type {
     FaceLoginResult,
     FaceLoginStartResponse,
     LoginResult,
+    MerchantLocation,
     MerchantSummary,
     NotificationCount,
     NotificationPreferences,
@@ -541,6 +542,12 @@ export const realApi = {
    *  every query word, at most 10. A blank query returns []. */
   searchMerchants: async (q: string, limit = 10): Promise<MerchantSummary[]> => {
     const { data } = await apiClient.get<MerchantSummary[]>('/merchants', { params: { q, limit } });
+    return Array.isArray(data) ? data : [];
+  },
+  /** The venue's active locations, ordered by name; [] when it has none.
+   *  404 MERCHANT_UNAVAILABLE when the venue is gone or inactive. */
+  getMerchantLocations: async (merchantId: string): Promise<MerchantLocation[]> => {
+    const { data } = await apiClient.get<MerchantLocation[]>(`/merchants/${encodeURIComponent(merchantId)}/locations`);
     return Array.isArray(data) ? data : [];
   },
   createReservation: async (payload: CreateReservationRequest): Promise<Booking> => {

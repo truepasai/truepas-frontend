@@ -13,9 +13,17 @@ import { useState } from 'react';
 
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
+import { useMe } from '@/features/account/hooks';
 import { useFamily } from '@/features/family/hooks';
 import { historyKeys, isEditableReservation, useBooking, useUpdateReservation } from '@/features/history/hooks';
-import { draftFromBooking, membersKnown, ReservationForm } from '@/features/history/ReservationForm';
+import {
+  draftFromBooking,
+  familyStateOf,
+  membersKnown,
+  ReservationForm,
+  type FamilyState,
+  type ReservationSelf,
+} from '@/features/history/ReservationForm';
 import { Async, EmptyView, LoadingView } from '@/premium/kit';
 import { Button, Screen, TopBar } from '@/premium/ui';
 import type { Booking, FamilyMember, UpdateReservationRequest } from '@/types/domain';
@@ -25,9 +33,13 @@ export default function EditReservationScreen() {
   const router = useRouter();
   const booking = useBooking(id);
   const family = useFamily();
+  const me = useMe();
 
   const b = booking.data;
-  if (b == null || (family.isPending && family.data == null)) {
+  // The baseline needs to know who "you" are. Who's going comes from the
+  // reservation itself, so the family list (loading, failed or loaded) is
+  // shown by the form instead of holding it back.
+  if (b == null || (me.isPending && me.data == null)) {
     // 404 = the reservation was deleted; useBooking doesn't retry it.
     const gone = !id || (booking.isError && toApiError(booking.error).status === 404);
     return (
@@ -59,18 +71,29 @@ export default function EditReservationScreen() {
     );
   }
 
-  return <EditForm b={b} family={family.data ?? []} />;
+  const self = me.data?.personId ? { personId: me.data.personId, name: me.data.fullName } : null;
+  return <EditForm b={b} family={family.data ?? []} familyState={familyStateOf(family)} self={self} />;
 }
 
 /** Mounted once per booking: the form's baseline (for the changed-fields
  *  diff) must not move when the booking refetches underneath it. */
-function EditForm({ b, family }: { b: Booking; family: FamilyMember[] }) {
+function EditForm({
+  b,
+  family,
+  familyState,
+  self,
+}: {
+  b: Booking;
+  family: FamilyMember[];
+  familyState: FamilyState;
+  self: ReservationSelf | null;
+}) {
   const router = useRouter();
   const qc = useQueryClient();
   const { toast } = useToast();
   const update = useUpdateReservation();
-  const [initial] = useState(() => draftFromBooking(b, family));
-  const [membersUnknown] = useState(() => !membersKnown(b, family));
+  const [initial] = useState(() => draftFromBooking(b, family, self?.personId));
+  const [membersUnknown] = useState(() => !membersKnown(b, family, self?.personId));
 
   const close = () => (router.canGoBack() ? router.back() : router.replace({ pathname: '/booking/[id]', params: { id: b.id } } as never));
 
@@ -100,6 +123,8 @@ function EditForm({ b, family }: { b: Booking; family: FamilyMember[] }) {
       mode="edit"
       initial={initial}
       family={family}
+      familyState={familyState}
+      self={self}
       saving={update.isPending}
       onUpdate={onUpdate}
       membersUnknown={membersUnknown}

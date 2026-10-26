@@ -34,6 +34,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
+import { useMe } from '@/features/account/hooks';
 import { useDocuments } from '@/features/documents/hooks';
 import { useFamily } from '@/features/family/hooks';
 import { isEditableReservation, useBooking, useBookings, useDeleteReservation } from '@/features/history/hooks';
@@ -89,8 +90,9 @@ export default function BookingDetailScreen() {
 
 /** checkedInMembers carries person ids on Oct 2026 payloads (names on older
  *  ones): resolve to you / a family member; never print a raw id. */
-function memberName(x: string, me: { id?: string; fullName?: string } | null | undefined, family: FamilyMember[]): string {
-  if (me?.id && x === me.id) return me.fullName || 'You';
+function memberName(x: string, me: { id?: string; personId?: string; fullName?: string } | null | undefined, family: FamilyMember[]): string {
+  // Reservations list the holder by their person id; older payloads, the account id.
+  if (me && (x === me.personId || x === me.id) && x) return me.fullName || 'You';
   const m = family.find((f) => f.id === x);
   if (m) return m.name;
   return /^[\w-]{16,}$/.test(x) && /\d/.test(x) ? 'Family member' : x;
@@ -99,7 +101,10 @@ function memberName(x: string, me: { id?: string; fullName?: string } | null | u
 function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
   const router = useRouter();
   const { toast } = useToast();
-  const user = useAppSelector((state) => state.auth.user);
+  const sessionUser = useAppSelector((state) => state.auth.user);
+  // GET /user/me carries the holder's personId, how a reservation lists them.
+  const me = useMe().data;
+  const user = me ? { ...sessionUser, ...me } : sessionUser;
   const { url: avatarUri } = useProfilePicture();
   const family = useFamily().data ?? [];
   const docs = useDocuments().data ?? [];
@@ -455,7 +460,7 @@ function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
           {/* ---------- the customer's own upcoming reservation ---------- */}
           {editable && (
             <Group title="Reservation">
-              <ListRow icon={Pencil} tone="sky" title="Edit reservation" sub="Dates, guests, who's going and notes" onPress={edit} />
+              <ListRow icon={Pencil} tone="sky" title="Edit reservation" sub="Venue, location, who's going, dates and notes" onPress={edit} />
               <ListRow icon={Trash2} danger title="Delete reservation" chevron={false} onPress={() => setConfirmDelete(true)} />
             </Group>
           )}

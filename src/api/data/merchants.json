@@ -1,9 +1,9 @@
 [
-  { "merchantId": "mock-merchant-hilton-gi", "businessName": "Hilton Garden Inn" },
-  { "merchantId": "mock-merchant-marriott", "businessName": "Marriott Resort" },
-  { "merchantId": "mock-merchant-taj-palace", "businessName": "Taj Palace Hotel" },
-  { "merchantId": "mock-merchant-universal", "businessName": "Universal Studios" },
-  { "merchantId": "mock-merchant-legoland", "businessName": "Legoland" },
-  { "merchantId": "mock-merchant-six-flags", "businessName": "Six Flags" },
-  { "merchantId": "mock-merchant-royal-carib", "businessName": "Royal Caribbean Cruise" }
+  { "merchantId": "mock-merchant-hilton-gi", "businessName": "Hilton Garden Inn", "category": "hotel" },
+  { "merchantId": "mock-merchant-marriott", "businessName": "Marriott Resort", "category": "hotel" },
+  { "merchantId": "mock-merchant-taj-palace", "businessName": "Taj Palace Hotel", "category": "hotel" },
+  { "merchantId": "mock-merchant-universal", "businessName": "Universal Studios", "category": null },
+  { "merchantId": "mock-merchant-legoland", "businessName": "Legoland", "category": null },
+  { "merchantId": "mock-merchant-six-flags", "businessName": "Six Flags", "category": null },
+  { "merchantId": "mock-merchant-royal-carib", "businessName": "Royal Caribbean Cruise", "category": "cruise" }
 ]

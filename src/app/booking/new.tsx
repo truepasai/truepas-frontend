@@ -7,15 +7,18 @@
  */
 import { useRouter } from 'expo-router';
 
+import { useMe } from '@/features/account/hooks';
 import { useFamily } from '@/features/family/hooks';
 import { useCreateReservation } from '@/features/history/hooks';
-import { EMPTY_DRAFT, ReservationForm } from '@/features/history/ReservationForm';
+import { EMPTY_DRAFT, ReservationForm, familyStateOf } from '@/features/history/ReservationForm';
 import type { CreateReservationRequest } from '@/types/domain';
 
 export default function NewReservationScreen() {
   const router = useRouter();
   const family = useFamily();
+  const me = useMe();
   const create = useCreateReservation();
+  const self = me.data?.personId ? { personId: me.data.personId, name: me.data.fullName } : null;
 
   const onCreate = async (payload: CreateReservationRequest) => {
     try {
@@ -32,6 +35,8 @@ export default function NewReservationScreen() {
       mode="create"
       initial={EMPTY_DRAFT}
       family={family.data ?? []}
+      familyState={familyStateOf(family)}
+      self={self}
       saving={create.isPending}
       onCreate={onCreate}
     />

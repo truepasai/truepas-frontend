@@ -9,7 +9,22 @@ export const historyKeys = {
   all: ['bookings'] as const,
   detail: (id: string) => ['bookings', id] as const,
   venues: (q: string) => ['merchants', 'search', q] as const,
+  locations: (merchantId: string) => ['merchants', merchantId, 'locations'] as const,
 };
+
+/** GET /merchants/{merchantId}/locations — the picked venue's active
+ *  locations. Skipped without a venue. A 4xx (the venue is gone) is final. */
+export function useMerchantLocations(merchantId: string | null) {
+  return useQuery({
+    queryKey: historyKeys.locations(merchantId ?? ''),
+    queryFn: () => api.getMerchantLocations(merchantId as string),
+    enabled: !!merchantId,
+    retry: (failureCount, error) => {
+      const status = toApiError(error).status;
+      return !(status != null && status >= 400 && status < 500) && failureCount < 1;
+    },
+  });
+}
 
 /** Venue search starts at this many characters. */
 export const VENUE_SEARCH_MIN = 2;

@@ -1,7 +1,11 @@
 export type VerificationStatus = 'verified' | 'pending' | 'missing' | 'failed';
 
 export interface User {
+  /** The account id. */
   id: string;
+  /** The account holder's own person id (GET /user/me): how they appear in a
+   *  reservation's memberIds / checkedInMembers. */
+  personId?: string;
   fullName: string;
   email: string;
   phone: string;
@@ -128,7 +132,7 @@ export interface FamilyPermissions {
   notifyOnCheckIn: boolean;
 }
 
-export type BookingKind = 'hotel' | 'park' | 'flight' | 'cinema' | 'cruise' | 'stadium' | 'concert' | 'other';
+export type BookingKind = 'hotel' | 'park' | 'flight' | 'cinema' | 'cruise' | 'car_rental' | 'stadium' | 'concert' | 'other';
 export type BookingStatus = 'completed' | 'failed' | 'upcoming' | 'expired';
 
 /** GET /bookings — kiosk check-ins and the customer's own reservations. */
@@ -158,21 +162,42 @@ export interface Booking {
   /** The TruePas venue (merchant) a reservation is for; null on free-text
    *  venues, which a kiosk check-in can't match. */
   merchantId?: string | null;
+  /** The merchant location the reservation is for (`location` is its name);
+   *  null on older reservations. On a kiosk check-in, the kiosk's location. */
+  locationId?: string | null;
 }
+
+/** A merchant's business category, which sets a reservation's kind. */
+export type MerchantCategory = 'hotel' | 'cruise' | 'car_rental';
 
 /** GET /merchants?q= — a TruePas venue the customer can reserve at. */
 export interface MerchantSummary {
   merchantId: string;
   businessName: string;
+  /** Null until the merchant chooses one (the reservation kind is then 'other'). */
+  category?: MerchantCategory | null;
+}
+
+/** GET /merchants/{merchantId}/locations — an active location of the venue. */
+export interface MerchantLocation {
+  locationId: string;
+  name: string;
+  /** Empty when the merchant gave none. */
+  address: string;
 }
 
 /** POST /bookings — a customer reservation. Dates are local YYYY-MM-DD. */
 export interface CreateReservationRequest {
   venue: string;
   /** Picked from GET /merchants; the BFF checks it is an active merchant
-   *  and sets `venue` to its registered business name. */
+   *  and sets `venue` to its registered business name and `kind` from its
+   *  category. */
   merchantId?: string;
+  /** One of the merchant's active locations (required with a merchant); the
+   *  BFF sets `location` to its name. */
+  locationId?: string;
   location?: string;
+  /** Ignored by the BFF when the reservation is at a merchant. */
   kind?: BookingKind;
   checkIn: string;
   checkOut?: string;

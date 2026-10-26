@@ -20,6 +20,7 @@ import type {
     FaceLoginResult,
     FaceLoginStartResponse,
     LoginResult,
+    MerchantLocation,
     MerchantSummary,
     NotificationCount,
     NotificationPreferences,
@@ -139,6 +140,25 @@ let family: FamilyMember[] = (familyData as FamilyMember[]).map((f) => ({
 }));
 let bookings: Booking[] = bookingsData as Booking[];
 const merchants: MerchantSummary[] = merchantsData as MerchantSummary[];
+/** Active locations per venue; Six Flags has none yet (the empty state). */
+const merchantLocations: Record<string, MerchantLocation[]> = {
+  'mock-merchant-hilton-gi': [
+    { locationId: 'mock-loc-hilton-airport', name: 'Airport', address: '1 Terminal Road' },
+    { locationId: 'mock-loc-hilton-downtown', name: 'Downtown', address: '220 Main Street' },
+  ],
+  'mock-merchant-marriott': [{ locationId: 'mock-loc-marriott-beach', name: 'Beachfront', address: '5 Ocean Drive' }],
+  'mock-merchant-taj-palace': [{ locationId: 'mock-loc-taj-colaba', name: 'Colaba', address: 'Apollo Bunder' }],
+  'mock-merchant-universal': [{ locationId: 'mock-loc-universal-main', name: 'Main Gate', address: '6000 Universal Blvd' }],
+  'mock-merchant-legoland': [{ locationId: 'mock-loc-legoland-park', name: 'Park Entrance', address: '1 Legoland Drive' }],
+  'mock-merchant-royal-carib': [
+    { locationId: 'mock-loc-rc-miami', name: 'Port of Miami', address: '1015 N America Way' },
+    { locationId: 'mock-loc-rc-galveston', name: 'Galveston Terminal', address: '2502 Harborside Drive' },
+  ],
+};
+/** As the BFF: a venue's category sets the reservation kind ('other' without one). */
+const kindOf = (m: MerchantSummary) => m.category ?? 'other';
+const locationProblem = (message: string, code = 'LOCATION_UNAVAILABLE') =>
+  failHttp(422, { code, message, errors: { locationId: message } });
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 let notifications: Notification[] = [
   { id: 'n1', title: 'Face enrolled', body: 'Your face is set up for check-in.', read: false, createdAt: minutesAgo(30), type: 'identity', data: { type: 'identity' } },
@@ -672,11 +692,21 @@ export const mockApi = {
     });
     return respond(hits.slice(0, Math.min(limit, 10)));
   },
+  getMerchantLocations: (merchantId: string): Promise<MerchantLocation[]> => {
+    if (!merchants.some((m) => m.merchantId === merchantId)) {
+      return failHttp(404, { code: 'MERCHANT_UNAVAILABLE', message: 'Choose a TruePas venue from the search results.' });
+    }
+    return respond(merchantLocations[merchantId] ?? []);
+  },
   createReservation: (payload: CreateReservationRequest): Promise<Booking> => {
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const merchant = payload.merchantId ? merchants.find((m) => m.merchantId === payload.merchantId) : undefined;
     if (payload.merchantId && !merchant) return fail("This venue isn't available. Search for it and choose it again.");
+    // As the BFF: a venue needs one of its active locations, whose name becomes `location`.
+    const site = merchant ? (merchantLocations[merchant.merchantId] ?? []).find((l) => l.locationId === payload.locationId) : undefined;
+    if (merchant && !payload.locationId) return locationProblem('Choose a location for this venue.', 'LOCATION_REQUIRED');
+    if ((merchant && !site) || (!merchant && payload.locationId)) return locationProblem("This location isn't available. Choose another one.");
     // As the BFF: a picked venue's name is the merchant's registered one.
     const venue = (merchant?.businessName ?? payload.venue ?? '').trim();
     if (!venue) return fail('Venue is required');
@@ -686,9 +716,10 @@ export const mockApi = {
       id: nextId('res-'),
       source: 'customer',
       venue,
-      location: payload.location ?? '',
+      location: site?.name ?? payload.location ?? '',
+      locationId: site?.locationId ?? null,
       type: 'reservation',
-      kind: payload.kind ?? 'other',
+      kind: merchant ? kindOf(merchant) : (payload.kind ?? 'other'),
       image: null,
       checkIn: payload.checkIn,
       checkOut: payload.checkOut ?? null,
@@ -698,7 +729,7 @@ export const mockApi = {
       amount: null,
       durationMs: null,
       notes: payload.notes ?? null,
-      checkedInMembers: [],
+      checkedInMembers: payload.memberIds ?? [],
       linkedBookingId: null,
       createdAt: new Date().toISOString(),
       merchantId: merchant?.merchantId ?? null,
@@ -713,7 +744,20 @@ export const mockApi = {
     if (b.source !== 'customer' || b.status !== 'upcoming') return fail("This booking can't be changed any more.");
     const merchant = patch.merchantId ? merchants.find((m) => m.merchantId === patch.merchantId) : undefined;
     if (patch.merchantId && !merchant) return fail("This venue isn't available. Search for it and choose it again.");
-    const updated: Booking = { ...b, ...patch, checkOut: patch.checkOut ?? b.checkOut, notes: patch.notes ?? b.notes };
+    // As the BFF: the reservation's merchant (new or kept) owns the location and sets the kind.
+    const owner = merchant ?? (patch.merchantId === undefined ? merchants.find((m) => m.merchantId === b.merchantId) : undefined);
+    const moved = !!merchant && merchant.merchantId !== b.merchantId;
+    const site = owner && patch.locationId ? (merchantLocations[owner.merchantId] ?? []).find((l) => l.locationId === patch.locationId) : undefined;
+    if (moved && !patch.locationId) return locationProblem('Choose a location for this venue.', 'LOCATION_REQUIRED');
+    if (patch.locationId && !site) return locationProblem("This location isn't available. Choose another one.");
+    const { memberIds, ...rest } = patch;
+    const updated: Booking = { ...b, ...rest, checkOut: patch.checkOut ?? b.checkOut, notes: patch.notes ?? b.notes };
+    if (memberIds) updated.checkedInMembers = memberIds;
+    if (owner) {
+      updated.kind = kindOf(owner);
+      updated.location = site?.name ?? b.location;
+      updated.locationId = site?.locationId ?? (moved ? null : b.locationId ?? null);
+    }
     // As upstream: a picked venue takes the merchant's name; a new free-text venue drops the merchant.
     if (merchant) updated.venue = merchant.businessName;
     else if (patch.venue != null && patch.venue !== b.venue) updated.merchantId = null;

@@ -1,150 +1,122 @@
 /** @jsxImportSource react */
 /**
- * Reservation form (BACKEND_UPDATE_2026-10 §8.3) — shared by
- * /booking/new (POST /bookings) and /booking/[id]/edit (PATCH, changed
- * fields only). Client checks mirror the backend's 422 rules: venue
- * required, check-in a local YYYY-MM-DD not in the past ("today" is fine),
- * check-out on or after check-in, 1–100 guests, notes up to 500 characters.
- * Server field errors land on their fields; anything else (409
- * RESERVATION_LIMIT, 404 member) shows in the banner. Check-in itself only
- * ever happens at the venue kiosk.
- *
- * The venue is a TruePas merchant picked from GET /merchants: a kiosk can
- * only match a reservation that carries its merchantId. New reservations
- * need a pick; typing after a pick drops it. A legacy free-text venue
- * still edits as before unless the user picks one.
+ * Reservation form — shared by /booking/new (POST /bookings) and
+ * /booking/[id]/edit (PATCH, changed fields only), in five steps:
+ *  1. Venue — a TruePas merchant picked from GET /merchants (a kiosk only
+ *     matches a reservation that carries its merchantId).
+ *  2. Location — one of that venue's active locations,
+ *     GET /merchants/{merchantId}/locations. Changing the venue clears it.
+ *  3. Who's going — you and your family members by name (memberIds); the
+ *     guest count is exactly the people chosen.
+ *  4. Dates — check-in a local YYYY-MM-DD not in the past ("today" is fine),
+ *     check-out optional and on or after check-in.
+ *  5. Review — every choice, notes, save.
+ * The venue's name, the reservation kind (from the venue's category) and the
+ * location's name are set by the BFF from the merchant's own profile; the
+ * app sends ids only. Editing opens on the review step. Draft, validation
+ * and payloads live in reservationDraft.ts (unit-tested). Server field
+ * errors land on their step, anything else (409 RESERVATION_LIMIT, 404
+ * member) shows in the banner. Choosing who is going is not consent to
+ * release anyone's documents. Check-in itself only ever happens at the venue
+ * kiosk.
  */
-import { BadgeCheck, Building2, Check, MapPin, Minus, Plus, UserRound } from 'lucide-react-native';
+import {
+  BadgeCheck,
+  Building2,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  MapPin,
+  Users,
+} from 'lucide-react-native';
 import { useState } from 'react';
-import { Keyboard, Pressable, Text, TextInput, View, type TextStyle } from 'react-native';
+import { Keyboard, Pressable, TextInput, View, type TextStyle } from 'react-native';
 
 import { toApiError } from '@/api/errors';
-import { VENUE_SEARCH_MIN, useVenueSearch } from '@/features/history/hooks';
-import { BOOKING_KINDS, KIND_META, bookingKind, isoDay } from '@/premium/flows/home';
+import { VENUE_SEARCH_MIN, useMerchantLocations, useVenueSearch } from '@/features/history/hooks';
+import {
+  NOTES_MAX,
+  draftFromBooking as draftFrom,
+  guestsFor,
+  personName,
+  reservationPeople,
+  toCreate,
+  toPatch,
+  toggleMember,
+  validate,
+  type DraftErrors,
+  type ReservationDraft,
+  type ReservationPerson,
+  type ReservationSelf,
+} from '@/features/history/reservationDraft';
 import { DateField } from '@/premium/flows/family';
+import { KIND_META, bookingKind, fmtDay, isoDay } from '@/premium/flows/home';
 import { Banner, Spinner } from '@/premium/kit';
 import { C, F, R } from '@/premium/theme';
-import { Button, Chip, Field, Group, Heading, ListRow, Row, Screen, TextLink, TopBar, Txt } from '@/premium/ui';
+import { Button, Field, Group, Heading, ListRow, Row, Screen, Steps, TextLink, TopBar, Txt } from '@/premium/ui';
 import type {
   Booking,
-  BookingKind,
   CreateReservationRequest,
   FamilyMember,
+  MerchantLocation,
   MerchantSummary,
   UpdateReservationRequest,
 } from '@/types/domain';
 
-export const NOTES_MAX = 500;
-const GUESTS_MIN = 1;
-const GUESTS_MAX = 100;
+export { EMPTY_DRAFT, membersKnown, NOTES_MAX } from '@/features/history/reservationDraft';
+export type { ReservationDraft, ReservationSelf } from '@/features/history/reservationDraft';
 
-export interface ReservationDraft {
-  venue: string;
-  /** The picked TruePas venue; null for none or a legacy free-text venue. */
-  merchantId: string | null;
-  location: string;
-  kind: BookingKind;
-  checkIn: string;
-  checkOut: string;
-  guests: number;
-  memberIds: string[];
-  notes: string;
+/** An existing booking as the form's starting draft. */
+export const draftFromBooking = (b: Booking, family: FamilyMember[], selfPersonId?: string): ReservationDraft =>
+  draftFrom(b, bookingKind(b), family, selfPersonId);
+
+/** GET /family as the form sees it: still loading, failed, or loaded. */
+export interface FamilyState {
+  status: 'loading' | 'error' | 'ready';
+  retry: () => void;
+}
+
+/** The family query (useFamily) as a FamilyState: loaded once it has data;
+ *  failed only when it has none and is not retrying. */
+export function familyStateOf(q: { data?: unknown; isError: boolean; isFetching: boolean; refetch: () => unknown }): FamilyState {
+  const status = q.data != null ? 'ready' : q.isError && !q.isFetching ? 'error' : 'loading';
+  return { status, retry: () => void q.refetch() };
 }
 
 type FieldKey = keyof ReservationDraft;
-type Errors = Partial<Record<FieldKey, string>>;
+type Errors = DraftErrors;
 
-export const EMPTY_DRAFT: ReservationDraft = {
-  venue: '',
-  merchantId: null,
-  location: '',
-  kind: 'other',
-  checkIn: '',
-  checkOut: '',
-  guests: 1,
-  memberIds: [],
-  notes: '',
+const STEPS = ['venue', 'location', 'people', 'dates', 'review'] as const;
+type Step = (typeof STEPS)[number];
+
+const STEP_TITLE: Record<Step, string> = {
+  venue: 'Venue',
+  location: 'Location',
+  people: "Who's going",
+  dates: 'Dates',
+  review: 'Review',
 };
 
-/** Who's going on an existing reservation. The Booking payload has no
- *  `memberIds` in the documented shape; use it when the server sends it,
- *  else the person ids in checkedInMembers that are family members. */
-export function knownMemberIds(b: Booking, family: FamilyMember[]): string[] {
-  const sent = (b as Booking & { memberIds?: unknown }).memberIds;
-  if (Array.isArray(sent)) return sent.filter((x): x is string => typeof x === 'string');
-  const ids = new Set(family.map((m) => m.id));
-  return (b.checkedInMembers ?? []).filter((x) => ids.has(x));
-}
+/** Which step owns each field (where its error is shown). */
+const STEP_OF: Record<FieldKey, Step> = {
+  venue: 'venue',
+  merchantId: 'venue',
+  kind: 'venue',
+  locationId: 'location',
+  location: 'location',
+  memberIds: 'people',
+  guests: 'people',
+  checkIn: 'dates',
+  checkOut: 'dates',
+  notes: 'review',
+};
 
-/** False when the payload says nothing about who's going (no memberIds and
- *  no family ids in checkedInMembers) — the form then can't show it. */
-export function membersKnown(b: Booking, family: FamilyMember[]): boolean {
-  return Array.isArray((b as Booking & { memberIds?: unknown }).memberIds) || knownMemberIds(b, family).length > 0;
-}
+const errorsOf = (errors: Errors, step: Step): Errors =>
+  Object.fromEntries(Object.entries(errors).filter(([k]) => STEP_OF[k as FieldKey] === step)) as Errors;
 
-export function draftFromBooking(b: Booking, family: FamilyMember[]): ReservationDraft {
-  return {
-    venue: b.venue ?? '',
-    merchantId: b.merchantId ?? null,
-    location: b.location ?? '',
-    kind: bookingKind(b),
-    checkIn: (b.checkIn ?? '').slice(0, 10),
-    checkOut: (b.checkOut ?? '').slice(0, 10),
-    guests: b.guests >= GUESTS_MIN ? b.guests : GUESTS_MIN,
-    memberIds: knownMemberIds(b, family),
-    notes: b.notes ?? '',
-  };
-}
-
-/** A new reservation, or one already at a TruePas venue, needs a picked
- *  venue; a legacy free-text one may keep free text. */
-const needsVenuePick = (original?: ReservationDraft) => !original || !!original.merchantId;
-
-/** Same rules as the backend. An unchanged check-in day is not re-checked:
- *  a stay that started yesterday is still an editable upcoming reservation. */
-function validate(d: ReservationDraft, original?: ReservationDraft): Errors {
-  const e: Errors = {};
-  if (needsVenuePick(original)) {
-    if (!d.merchantId) e.venue = 'Choose a venue from the search results';
-  } else if (!d.venue.trim()) e.venue = 'Enter the venue name';
-  if (!d.checkIn) e.checkIn = 'Pick the check-in date';
-  else if (d.checkIn < isoDay() && d.checkIn !== original?.checkIn) e.checkIn = "Check-in can't be in the past";
-  if (d.checkOut && d.checkIn && d.checkOut < d.checkIn) e.checkOut = 'Check-out must be on or after check-in';
-  if (!Number.isInteger(d.guests) || d.guests < GUESTS_MIN || d.guests > GUESTS_MAX) e.guests = 'Guests must be between 1 and 100';
-  if (d.notes.trim().length > NOTES_MAX) e.notes = `Notes can be up to ${NOTES_MAX} characters`;
-  return e;
-}
-
-function toCreate(d: ReservationDraft): CreateReservationRequest {
-  const p: CreateReservationRequest = { venue: d.venue.trim(), kind: d.kind, checkIn: d.checkIn, guests: d.guests };
-  if (d.merchantId) p.merchantId = d.merchantId;
-  if (d.location.trim()) p.location = d.location.trim();
-  if (d.checkOut) p.checkOut = d.checkOut;
-  if (d.memberIds.length > 0) p.memberIds = d.memberIds;
-  if (d.notes.trim()) p.notes = d.notes.trim();
-  return p;
-}
-
-const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
-
-/** Only what changed (PATCH accepts any subset). */
-function toPatch(d: ReservationDraft, o: ReservationDraft): UpdateReservationRequest {
-  const p: UpdateReservationRequest = {};
-  // A venue sent without merchantId drops the merchant upstream, so a picked
-  // venue always goes with its id.
-  if (d.venue.trim() !== o.venue.trim() || d.merchantId !== o.merchantId) {
-    p.venue = d.venue.trim();
-    if (d.merchantId) p.merchantId = d.merchantId;
-  }
-  if (d.location.trim() !== o.location.trim()) p.location = d.location.trim();
-  if (d.kind !== o.kind) p.kind = d.kind;
-  if (d.checkIn !== o.checkIn) p.checkIn = d.checkIn;
-  if (d.checkOut && d.checkOut !== o.checkOut) p.checkOut = d.checkOut;
-  if (d.guests !== o.guests) p.guests = d.guests;
-  if (!sameSet(d.memberIds, o.memberIds)) p.memberIds = d.memberIds;
-  if (d.notes.trim() !== o.notes.trim()) p.notes = d.notes.trim();
-  return p;
-}
+const firstStepWith = (errors: Errors): Step | undefined => STEPS.find((s) => Object.keys(errorsOf(errors, s)).length > 0);
 
 /** 422 field names (camelCase or snake_case) → form fields. */
 const FIELD_OF: Record<string, FieldKey> = {
@@ -152,17 +124,29 @@ const FIELD_OF: Record<string, FieldKey> = {
   // 422 MERCHANT_UNAVAILABLE: the picked venue was removed or deactivated.
   merchantId: 'venue',
   merchant_id: 'venue',
-  location: 'location',
-  kind: 'kind',
+  // 422 LOCATION_REQUIRED / LOCATION_UNAVAILABLE.
+  locationId: 'locationId',
+  location_id: 'locationId',
+  location: 'locationId',
   checkIn: 'checkIn',
   check_in: 'checkIn',
   checkOut: 'checkOut',
   check_out: 'checkOut',
-  guests: 'guests',
+  guests: 'memberIds',
   memberIds: 'memberIds',
   member_ids: 'memberIds',
   notes: 'notes',
 };
+
+const HEADINGS: Record<Step, { title: string; accent: string; sub: string }> = {
+  venue: { title: 'Where are you', accent: 'going?', sub: 'Choose a TruePas venue. You check in at its kiosk.' },
+  location: { title: 'Which', accent: 'location?', sub: 'Choose the location of the venue you are going to.' },
+  people: { title: "Who's", accent: 'going?', sub: 'Choose yourself and the family members on this reservation.' },
+  dates: { title: 'When are you', accent: 'going?', sub: 'Check-out is optional for a single day.' },
+  review: { title: 'Review your', accent: 'reservation', sub: 'Check the details, then save. You still check in at the venue kiosk.' },
+};
+
+const peopleCount = (n: number) => `${n} ${n === 1 ? 'person' : 'people'} going`;
 
 export type SubmitResult = { ok: true } | { ok: false; error: unknown };
 
@@ -170,6 +154,8 @@ export function ReservationForm({
   mode,
   initial,
   family,
+  familyState,
+  self,
   saving,
   onCreate,
   onUpdate,
@@ -178,50 +164,86 @@ export function ReservationForm({
   mode: 'create' | 'edit';
   initial: ReservationDraft;
   family: FamilyMember[];
+  /** Whether GET /family is loading, failed or loaded: never hidden. */
+  familyState: FamilyState;
+  /** The signed-in holder (GET /user/me personId); null while unknown. */
+  self: ReservationSelf | null;
   saving: boolean;
   onCreate?: (payload: CreateReservationRequest) => Promise<SubmitResult>;
   /** Called with an empty patch when nothing changed. */
   onUpdate?: (patch: UpdateReservationRequest) => Promise<SubmitResult>;
-  /** Editing a booking whose payload doesn't list who's going: untouched
-   *  chips are not sent, so the server keeps its list. */
+  /** Editing a booking that never recorded who's going: left as is, nothing
+   *  about the people is sent. */
   membersUnknown?: boolean;
 }) {
+  const editing = mode === 'edit';
   const [d, setD] = useState<ReservationDraft>(initial);
+  const [step, setStep] = useState<Step>(editing ? 'review' : 'venue');
   const [errors, setErrors] = useState<Errors>({});
   const [banner, setBanner] = useState<string | null>(null);
-  const editing = mode === 'edit';
   // Results show once the user types in the venue field, until a pick.
   const [venueTyped, setVenueTyped] = useState(false);
   const venueSearch = useVenueSearch(d.venue, venueTyped && !d.merchantId);
-  const pickRequired = needsVenuePick(editing ? initial : undefined);
+  const locations = useMerchantLocations(d.merchantId);
+  const index = STEPS.indexOf(step);
+  const people = reservationPeople(self, family);
 
   const set = <K extends FieldKey>(k: K, v: ReservationDraft[K]) => {
     setD((prev) => ({ ...prev, [k]: v }));
     if (errors[k]) setErrors((prev) => ({ ...prev, [k]: undefined }));
   };
 
-  /** Typing searches again and drops any picked venue. */
+  /** Typing searches again and drops any picked venue, and its location. */
   const typeVenue = (t: string) => {
-    setD((prev) => ({ ...prev, venue: t, merchantId: null }));
+    setD((prev) => ({ ...prev, venue: t, merchantId: null, locationId: null, location: '' }));
     setVenueTyped(true);
     if (errors.venue) setErrors((prev) => ({ ...prev, venue: undefined }));
   };
 
+  /** Another venue clears the previous one's location. */
   const pickVenue = (m: MerchantSummary) => {
-    setD((prev) => ({ ...prev, venue: m.businessName, merchantId: m.merchantId }));
+    setD((prev) => ({
+      ...prev,
+      venue: m.businessName,
+      merchantId: m.merchantId,
+      kind: m.category ?? 'other',
+      ...(prev.merchantId !== m.merchantId ? { locationId: null, location: '' } : {}),
+    }));
     setVenueTyped(false);
     if (errors.venue) setErrors((prev) => ({ ...prev, venue: undefined }));
     Keyboard.dismiss();
   };
 
-  const toggleMember = (id: string) =>
-    set('memberIds', d.memberIds.includes(id) ? d.memberIds.filter((x) => x !== id) : [...d.memberIds, id]);
+  const pickLocation = (l: MerchantLocation) => {
+    setD((prev) => ({ ...prev, locationId: l.locationId, location: l.name }));
+    if (errors.locationId) setErrors((prev) => ({ ...prev, locationId: undefined }));
+  };
+
+  const toggle = (personId: string) => set('memberIds', toggleMember(d.memberIds, personId));
+
+  const check = () => validate(d, isoDay(), editing ? initial : undefined, membersUnknown);
+
+  const go = (next: Step) => {
+    setBanner(null);
+    setStep(next);
+  };
+
+  const nextStep = () => {
+    const stepErrors = errorsOf(check(), step);
+    setErrors((prev) => ({ ...prev, ...stepErrors }));
+    if (Object.keys(stepErrors).length > 0) return;
+    go(STEPS[index + 1]);
+  };
 
   const submit = async () => {
     setBanner(null);
-    const next = validate(d, editing ? initial : undefined);
-    setErrors(next);
-    if (Object.keys(next).length > 0) return;
+    const all = check();
+    setErrors(all);
+    const failing = firstStepWith(all);
+    if (failing) {
+      setStep(failing);
+      return;
+    }
 
     const result = editing ? await onUpdate?.(toPatch(d, initial)) : await onCreate?.(toCreate(d));
     if (!result || result.ok) return;
@@ -236,10 +258,15 @@ export function ReservationForm({
     }
     setErrors(fieldErrors);
     if (err.serverCode === 'MERCHANT_UNAVAILABLE') {
-      // The picked venue is gone: drop it and show matches for its name again.
-      setD((prev) => ({ ...prev, merchantId: null }));
+      // The picked venue is gone: drop it (and its location), search again.
+      setD((prev) => ({ ...prev, merchantId: null, locationId: null, location: '' }));
       setVenueTyped(true);
+    } else if (err.serverCode === 'LOCATION_REQUIRED' || err.serverCode === 'LOCATION_UNAVAILABLE') {
+      setD((prev) => ({ ...prev, locationId: null, location: '' }));
+      void locations.refetch();
     }
+    const failingStep = firstStepWith(fieldErrors);
+    if (failingStep) setStep(failingStep);
     const mapped = Object.keys(fieldErrors).length > 0;
     setBanner(loose.length > 0 ? loose.join('\n') : mapped ? null : err.message);
   };
@@ -247,31 +274,53 @@ export function ReservationForm({
   // Clearing an existing check-out isn't in the PATCH contract (string only).
   const canClearCheckOut = !!d.checkOut && !(editing && initial.checkOut);
   const today = isoDay();
+  const heading = step === 'review' && editing ? { ...HEADINGS.review, title: 'Edit your' } : HEADINGS[step];
+  const chosenLocation = (locations.data ?? []).find((l) => l.locationId === d.locationId);
+  const nobodyRecorded = membersUnknown && d.memberIds.length === 0;
+
+  const footer =
+    step === 'review' ? (
+      <Row gap={10}>
+        {!editing && <Button label="Back" tone="white" full={false} onPress={() => go('dates')} />}
+        <Button
+          label={editing ? 'Save changes' : 'Save reservation'}
+          icon={Check}
+          loading={saving}
+          disabled={saving}
+          style={{ flex: 1 }}
+          onPress={() => void submit()}
+        />
+      </Row>
+    ) : (
+      <Row gap={10}>
+        {index > 0 && <Button label="Back" tone="white" full={false} onPress={() => go(STEPS[index - 1])} />}
+        <Button label="Next" iconRight={ChevronRight} style={{ flex: 1 }} onPress={nextStep} />
+      </Row>
+    );
 
   return (
     <Screen
       keyboard
       header={<TopBar title={editing ? 'Edit reservation' : 'Add reservation'} />}
       contentStyle={{ paddingTop: 8, gap: 24 }}
-      footer={
-        <Button
-          label={editing ? 'Save changes' : 'Save reservation'}
-          icon={Check}
-          loading={saving}
-          disabled={saving}
-          onPress={() => void submit()}
-        />
-      }
+      footer={footer}
     >
-      <Heading
-        title={editing ? 'Edit your' : 'Add a'}
-        accent="reservation"
-        sub="Keep your plans in one place. You still check in at the venue kiosk."
-      />
+      <View
+        style={{ gap: 8 }}
+        accessible
+        accessibilityRole="progressbar"
+        accessibilityLabel={`Step ${index + 1} of ${STEPS.length}: ${STEP_TITLE[step]}`}
+        accessibilityValue={{ min: 1, max: STEPS.length, now: index + 1 }}
+      >
+        <Steps total={STEPS.length} current={index} />
+        <Txt v="small">{`Step ${index + 1} of ${STEPS.length} · ${STEP_TITLE[step]}`}</Txt>
+      </View>
+
+      <Heading title={heading.title} accent={heading.accent} sub={heading.sub} />
 
       {banner != null && <Banner tone="error" title={editing ? "Couldn't save changes" : "Couldn't add the reservation"} body={banner} />}
 
-      <View style={{ gap: 18 }}>
+      {step === 'venue' && (
         <View style={{ gap: 10 }}>
           <Field
             label="Venue"
@@ -282,8 +331,8 @@ export function ReservationForm({
             error={errors.venue}
             hint={
               d.merchantId
-                ? 'TruePas venue selected.'
-                : pickRequired && !venueSearch.active
+                ? `${KIND_META[d.kind].label === 'Other' ? 'TruePas venue' : KIND_META[d.kind].label} selected.`
+                : !venueSearch.active
                   ? `Type at least ${VENUE_SEARCH_MIN} characters, then choose your venue from the list.`
                   : undefined
             }
@@ -307,92 +356,109 @@ export function ReservationForm({
             />
           )}
         </View>
-        <Field
-          label="Location (optional)"
-          icon={MapPin}
-          placeholder="City"
-          value={d.location}
-          onChangeText={(t) => set('location', t)}
-          error={errors.location}
-          inputProps={{ autoCapitalize: 'words', maxLength: 120, autoComplete: 'off' }}
-        />
-      </View>
+      )}
 
-      <View style={{ gap: 10 }}>
-        <Txt v="smallStrong" color={C.ink2}>
-          Type
-        </Txt>
-        <Row gap={8} style={{ flexWrap: 'wrap' }}>
-          {BOOKING_KINDS.map((k) => (
-            <Chip key={k} label={KIND_META[k].label} icon={KIND_META[k].icon} active={d.kind === k} onPress={() => set('kind', k)} />
-          ))}
-        </Row>
-        {!!errors.kind && (
-          <Txt v="small" color={C.redInk}>
-            {errors.kind}
-          </Txt>
-        )}
-      </View>
-
-      <View style={{ gap: 18 }}>
-        <DateField
-          label="Check-in"
-          value={d.checkIn || undefined}
-          onChange={(iso) => {
-            set('checkIn', iso);
-            if (d.checkOut && d.checkOut < iso) set('checkOut', '');
-          }}
-          placeholder="Select date"
-          minDate={today}
-          error={errors.checkIn}
+      {step === 'location' && (
+        <LocationSelect
+          venue={d.venue}
+          locations={locations.data}
+          loading={locations.isPending && !!d.merchantId}
+          failed={locations.isError}
+          selectedId={d.locationId}
+          selectedName={d.location}
+          error={errors.locationId}
+          onPick={pickLocation}
+          onRetry={() => void locations.refetch()}
+          onChangeVenue={() => go('venue')}
         />
-        <View>
+      )}
+
+      {step === 'people' && (
+        <PeoplePicker
+          people={people}
+          selected={d.memberIds}
+          familyState={familyState}
+          selfKnown={!!self}
+          error={errors.memberIds}
+          hint={
+            nobodyRecorded
+              ? "This reservation doesn't say who's going. Leave it as is, or choose who's going."
+              : "The venue's kiosk checks in only the people chosen here. Choosing someone doesn't share their documents."
+          }
+          onToggle={toggle}
+        />
+      )}
+
+      {step === 'dates' && (
+        <View style={{ gap: 18 }}>
           <DateField
-            label="Check-out (optional)"
-            value={d.checkOut || undefined}
-            onChange={(iso) => set('checkOut', iso)}
+            label="Check-in"
+            value={d.checkIn || undefined}
+            onChange={(iso) => {
+              set('checkIn', iso);
+              if (d.checkOut && d.checkOut < iso) set('checkOut', '');
+            }}
             placeholder="Select date"
-            minDate={d.checkIn && d.checkIn > today ? d.checkIn : today}
-            error={errors.checkOut}
+            minDate={today}
+            error={errors.checkIn}
           />
-          {canClearCheckOut && (
-            <View style={{ position: 'absolute', right: 2, top: 0 }}>
-              <TextLink label="Clear" onPress={() => set('checkOut', '')} />
-            </View>
-          )}
-        </View>
-      </View>
-
-      <GuestStepper value={d.guests} onChange={(n) => set('guests', n)} error={errors.guests} />
-
-      {family.length > 0 && (
-        <View style={{ gap: 10 }}>
-          <Txt v="smallStrong" color={C.ink2}>
-            {"Who's going (optional)"}
-          </Txt>
-          <Row gap={8} style={{ flexWrap: 'wrap' }}>
-            {family.map((m) => {
-              const on = d.memberIds.includes(m.id);
-              return (
-                <Chip key={m.id} label={m.name.split(' ')[0]} icon={on ? Check : UserRound} active={on} onPress={() => toggleMember(m.id)} />
-              );
-            })}
-          </Row>
-          {errors.memberIds ? (
-            <Txt v="small" color={C.redInk}>
-              {errors.memberIds}
-            </Txt>
-          ) : (
-            <Txt v="small">
-              {membersUnknown && sameSet(d.memberIds, initial.memberIds)
-                ? "Leave as is to keep who's going unchanged."
-                : 'Family members on this booking.'}
-            </Txt>
-          )}
+          <View>
+            <DateField
+              label="Check-out (optional)"
+              value={d.checkOut || undefined}
+              onChange={(iso) => set('checkOut', iso)}
+              placeholder="Select date"
+              minDate={d.checkIn && d.checkIn > today ? d.checkIn : today}
+              error={errors.checkOut}
+            />
+            {canClearCheckOut && (
+              <View style={{ position: 'absolute', right: 2, top: 0 }}>
+                <TextLink label="Clear" onPress={() => set('checkOut', '')} />
+              </View>
+            )}
+          </View>
         </View>
       )}
 
-      <NotesField value={d.notes} onChange={(t) => set('notes', t)} error={errors.notes} />
+      {step === 'review' && (
+        <View style={{ gap: 24 }}>
+          <Group>
+            <ListRow
+              icon={Building2}
+              tone="sky"
+              title={d.venue || 'Choose a venue'}
+              sub={d.merchantId ? KIND_META[d.kind].label : 'Not a TruePas venue yet'}
+              onPress={() => go('venue')}
+            />
+            <ListRow
+              icon={MapPin}
+              tone="sky"
+              title={d.locationId ? (chosenLocation?.name ?? d.location) || 'Location chosen' : 'Choose a location'}
+              sub={chosenLocation?.address || undefined}
+              onPress={() => go(d.merchantId ? 'location' : 'venue')}
+            />
+            <ListRow
+              icon={Users}
+              tone="sky"
+              title={
+                d.memberIds.length > 0
+                  ? d.memberIds.map((id) => personName(id, people)).join(', ')
+                  : nobodyRecorded ? 'Not recorded' : "Choose who's going"
+              }
+              sub={d.memberIds.length > 0 ? peopleCount(d.memberIds.length) : nobodyRecorded ? `${guestsFor(d)} guests` : undefined}
+              onPress={() => go('people')}
+            />
+            <ListRow
+              icon={CalendarDays}
+              tone="sky"
+              title={d.checkIn ? (d.checkOut && d.checkOut !== d.checkIn ? `${fmtDay(d.checkIn)} – ${fmtDay(d.checkOut)}` : fmtDay(d.checkIn)) : 'Choose the dates'}
+              sub={d.checkOut ? undefined : 'Single day'}
+              onPress={() => go('dates')}
+            />
+          </Group>
+          <NotesField value={d.notes} onChange={(t) => set('notes', t)} error={errors.notes} />
+        </View>
+      )}
     </Screen>
   );
 }
@@ -419,7 +485,15 @@ function VenueResults({
     return (
       <Group>
         {results.map((m) => (
-          <ListRow key={m.merchantId} icon={Building2} tone="sky" title={m.businessName} chevron={false} onPress={() => onPick(m)} />
+          <ListRow
+            key={m.merchantId}
+            icon={m.category ? KIND_META[m.category].icon : Building2}
+            tone="sky"
+            title={m.businessName}
+            sub={m.category ? KIND_META[m.category].label : undefined}
+            chevron={false}
+            onPress={() => onPick(m)}
+          />
         ))}
       </Group>
     );
@@ -441,56 +515,242 @@ function VenueResults({
   );
 }
 
-function StepButton({ icon: Icon, label, disabled, onPress }: { icon: typeof Plus; label: string; disabled: boolean; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} disabled={disabled} accessibilityRole="button" accessibilityLabel={label} hitSlop={6}>
-      <View
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 20,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: disabled ? C.sunken : C.skyWash,
-        }}
-      >
-        <Icon size={18} color={disabled ? C.ink4 : C.skyPressed} strokeWidth={2.4} />
+/** A dropdown of the venue's active locations: the closed field shows the
+ *  choice; opening it lists every location as a radio option. */
+function LocationSelect({
+  venue,
+  locations,
+  loading,
+  failed,
+  selectedId,
+  selectedName,
+  error,
+  onPick,
+  onRetry,
+  onChangeVenue,
+}: {
+  venue: string;
+  locations: MerchantLocation[] | undefined;
+  loading: boolean;
+  failed: boolean;
+  selectedId: string | null;
+  selectedName: string;
+  error?: string;
+  onPick: (l: MerchantLocation) => void;
+  onRetry: () => void;
+  onChangeVenue: () => void;
+}) {
+  const [open, setOpen] = useState(!selectedId);
+  const selected = locations?.find((l) => l.locationId === selectedId);
+  const label = selected?.name ?? (selectedId ? selectedName : '');
+
+  if (loading) {
+    return (
+      <Row gap={10} style={{ paddingHorizontal: 4 }}>
+        <Spinner size={18} />
+        <Txt v="small">{`Loading ${venue}'s locations…`}</Txt>
+      </Row>
+    );
+  }
+  if (failed) {
+    return (
+      <Row gap={8} style={{ flexWrap: 'wrap', paddingHorizontal: 4 }}>
+        <Txt v="small" color={C.redInk}>
+          {"Couldn't load the locations."}
+        </Txt>
+        <TextLink label="Try again" onPress={onRetry} />
+      </Row>
+    );
+  }
+  if (!locations || locations.length === 0) {
+    return (
+      <View style={{ gap: 8, paddingHorizontal: 4 }}>
+        <Txt v="small" color={error ? C.redInk : C.ink3}>
+          {`${venue} has no locations open for reservations yet.`}
+        </Txt>
+        <TextLink label="Choose another venue" onPress={onChangeVenue} />
       </View>
-    </Pressable>
+    );
+  }
+
+  const Chevron = open ? ChevronUp : ChevronDown;
+  return (
+    <View style={{ gap: 10 }}>
+      <Txt v="smallStrong" color={C.ink2}>
+        Location
+      </Txt>
+      <Pressable
+        onPress={() => setOpen((o) => !o)}
+        accessibilityRole="button"
+        accessibilityLabel={`Location: ${label || 'not chosen'}`}
+        accessibilityHint={open ? 'Hides the locations' : `Shows ${venue}'s locations`}
+        aria-expanded={open}
+      >
+        <View
+          style={{
+            minHeight: 56,
+            borderRadius: R.md,
+            backgroundColor: C.surface,
+            borderWidth: 1.5,
+            borderColor: error ? C.red : open ? C.sky : C.line,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+          }}
+        >
+          <MapPin size={18} color={C.ink3} />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Txt v="bodyStrong" color={label ? C.ink : C.ink4}>
+              {label || 'Choose a location'}
+            </Txt>
+            {!!selected?.address && <Txt v="small">{selected.address}</Txt>}
+          </View>
+          <Chevron size={18} color={C.ink3} />
+        </View>
+      </Pressable>
+      {open && (
+        <Group>
+          {locations.map((l) => {
+            const on = l.locationId === selectedId;
+            return (
+              <Pressable
+                key={l.locationId}
+                onPress={() => {
+                  onPick(l);
+                  setOpen(false);
+                }}
+                accessibilityRole="radio"
+                aria-checked={on}
+                accessibilityLabel={l.address ? `${l.name}, ${l.address}` : l.name}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 }}>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Txt v="bodyStrong">{l.name}</Txt>
+                    {!!l.address && <Txt v="small">{l.address}</Txt>}
+                  </View>
+                  {on && <Check size={18} color={C.skyPressed} strokeWidth={2.4} />}
+                </View>
+              </Pressable>
+            );
+          })}
+        </Group>
+      )}
+      {!!error && (
+        <Txt v="small" color={C.redInk}>
+          {error}
+        </Txt>
+      )}
+    </View>
   );
 }
 
-function GuestStepper({ value, onChange, error }: { value: number; onChange: (n: number) => void; error?: string }) {
+/** You and every family member as a checklist; the family list's loading,
+ *  failure and emptiness are always shown, never silently hidden. */
+function PeoplePicker({
+  people,
+  selected,
+  familyState,
+  selfKnown,
+  error,
+  hint,
+  onToggle,
+}: {
+  people: ReservationPerson[];
+  selected: string[];
+  familyState: FamilyState;
+  selfKnown: boolean;
+  error?: string;
+  hint: string;
+  onToggle: (personId: string) => void;
+}) {
+  const familyCount = people.filter((p) => !p.self).length;
+  // Chosen people the list can't name yet (family still loading or failed),
+  // or no longer in the family: kept as they are, counted here.
+  const unnamed = selected.filter((id) => !people.some((p) => p.personId === id)).length;
   return (
-    <View style={{ gap: 8 }}>
-      <Txt v="smallStrong" color={C.ink2}>
-        Guests
-      </Txt>
-      <View
-        accessible={false}
-        style={{
-          height: 56,
-          borderRadius: R.md,
-          backgroundColor: C.surface,
-          borderWidth: 1.5,
-          borderColor: error ? C.red : C.line,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingHorizontal: 8,
-        }}
-      >
-        <StepButton icon={Minus} label="Fewer guests" disabled={value <= GUESTS_MIN} onPress={() => onChange(Math.max(GUESTS_MIN, value - 1))} />
-        <Text
-          accessibilityLabel={`${value} ${value === 1 ? 'guest' : 'guests'}`}
-          style={{ fontFamily: F.bold, fontSize: 18, color: C.ink }}
-        >
-          {value}
-        </Text>
-        <StepButton icon={Plus} label="More guests" disabled={value >= GUESTS_MAX} onPress={() => onChange(Math.min(GUESTS_MAX, value + 1))} />
-      </View>
-      <Txt v="small" color={error ? C.redInk : C.ink3}>
-        {error ?? 'Including you.'}
+    <View style={{ gap: 12 }}>
+      <Row between>
+        <Txt v="smallStrong" color={C.ink2}>
+          {"Who's going"}
+        </Txt>
+        <Txt v="smallStrong" color={selected.length > 0 ? C.skyPressed : C.ink4}>
+          {peopleCount(selected.length)}
+        </Txt>
+      </Row>
+
+      {people.length > 0 && (
+        <Group>
+          {people.map((p) => {
+            const on = selected.includes(p.personId);
+            return (
+              <Pressable
+                key={p.personId}
+                onPress={() => onToggle(p.personId)}
+                accessibilityRole="checkbox"
+                aria-checked={on}
+                accessibilityLabel={p.self ? `You, ${p.detail}` : p.detail ? `${p.name}, ${p.detail}` : p.name}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 }}>
+                  <View
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 7,
+                      borderWidth: 2,
+                      borderColor: on ? C.sky : C.line,
+                      backgroundColor: on ? C.sky : C.surface,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {on && <Check size={15} color={C.white} strokeWidth={3} />}
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Txt v="bodyStrong" color={on ? C.ink : C.ink2}>
+                      {p.name}
+                    </Txt>
+                    {!!p.detail && <Txt v="small">{p.detail}</Txt>}
+                  </View>
+                </View>
+              </Pressable>
+            );
+          })}
+        </Group>
+      )}
+
+      {familyState.status === 'loading' && (
+        <Row gap={10} style={{ paddingHorizontal: 4 }}>
+          <Spinner size={18} />
+          <Txt v="small">Loading your family members…</Txt>
+        </Row>
+      )}
+      {familyState.status === 'error' && (
+        <Row gap={8} style={{ flexWrap: 'wrap', paddingHorizontal: 4 }}>
+          <Txt v="small" color={C.redInk}>
+            {"Couldn't load your family members."}
+          </Txt>
+          <TextLink label="Try again" onPress={familyState.retry} />
+        </Row>
+      )}
+      {familyState.status === 'ready' && familyCount === 0 && (
+        <Txt v="small" style={{ paddingHorizontal: 4 }}>
+          {selfKnown
+            ? 'Only you can be added: there are no family members on your account yet. Add them in Family.'
+            : 'There are no family members on your account yet. Add them in Family.'}
+        </Txt>
+      )}
+      {unnamed > 0 && (
+        <Txt v="small" style={{ paddingHorizontal: 4 }}>
+          {familyState.status === 'ready'
+            ? `${unnamed} more ${unnamed === 1 ? 'person is' : 'people are'} on this reservation who ${unnamed === 1 ? 'is' : 'are'} no longer in your family.`
+            : `${unnamed} more ${unnamed === 1 ? 'person' : 'people'} on this reservation will show once your family list loads.`}
+        </Txt>
+      )}
+
+      <Txt v="small" color={error ? C.redInk : C.ink3} style={{ paddingHorizontal: 4 }}>
+        {error ?? hint}
       </Txt>
     </View>
   );
