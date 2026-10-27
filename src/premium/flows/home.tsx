@@ -1287,8 +1287,19 @@ export function ProfileDrawer({ visible, onClose }: { visible: boolean; onClose:
     if (visible) {
       // Re-opened while the close animation was still running — the Modal
       // never unmounted, so onShow won't fire again.
-      if (modalReady.current) animateTo(1);
-      return;
+      if (modalReady.current) {
+        animateTo(1);
+        return;
+      }
+      // iOS (Fabric) doesn't reliably fire the Modal's onShow, which left the
+      // drawer invisible there and the avatar tap dead. Open anyway once the
+      // Modal has had a frame to mount — outside the commit that mounts it.
+      const fallback = setTimeout(() => {
+        if (modalReady.current) return;
+        modalReady.current = true;
+        animateTo(1);
+      }, 120);
+      return () => clearTimeout(fallback);
     }
     animateTo(0, () => {
       modalReady.current = false;
@@ -1313,6 +1324,8 @@ export function ProfileDrawer({ visible, onClose }: { visible: boolean; onClose:
       onRequestClose={onClose}
       statusBarTranslucent
       onShow={() => {
+        // The fallback timer in the effect may have opened it already.
+        if (modalReady.current) return;
         modalReady.current = true;
         if (visible) animateTo(1);
       }}
