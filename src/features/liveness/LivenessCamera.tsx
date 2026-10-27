@@ -45,13 +45,24 @@ import { useAppSelector } from '@/store';
 import { useThemeTokens } from '@/theme';
 import { errorHaptic, successHaptic, tapHaptic } from '@/services/haptics';
 
+/** A passed liveness capture, for a server-side 1:1 match (verify mode). */
+export interface LivenessCapture {
+  livenessSessionId: string;
+  sessionToken: string;
+}
+
 interface LivenessCameraProps {
-  /** "enroll" for first-time enrollment, "update" for face update flow. */
-  mode: 'enroll' | 'update';
-  /** Family member personId (for family face enrollment). */
+  /** "enroll" for first-time enrollment, "update" for face update flow,
+   *  "verify" to prove who is in front of the camera without changing any
+   *  face: the passed capture goes to `onVerified`, and the caller's request
+   *  has the BFF match it against `personId`'s enrolled face. */
+  mode: 'enroll' | 'update' | 'verify';
+  /** Family member personId (for family face enrollment, or the person verified). */
   personId?: string;
   /** Called after successful face enrollment/update. */
   onSuccess: () => void;
+  /** Verify mode: the single-use capture (the screen submits it). */
+  onVerified?: (capture: LivenessCapture) => void;
   /** Called on unrecoverable error. Recoverable failures (step rejected,
    *  429 rate limit, network) are handled in-place by the built-in failed
    *  UI with a retry cooldown, so this rarely fires. */
@@ -104,6 +115,7 @@ export function LivenessCamera({
   mode,
   personId,
   onSuccess,
+  onVerified,
   onError,
   allowBackCamera,
   onReauthRequired,
@@ -476,6 +488,12 @@ export function LivenessCamera({
   // NEW challenge (reset → idle → auto-creates a fresh session).
   const enrollFaceNow = useCallback(async () => {
     if (enrolling || liveness.phase !== 'passed' || !liveness.result) return;
+    if (mode === 'verify') {
+      // Nothing is enrolled: the screen sends the capture with its request.
+      const capture = { livenessSessionId: liveness.result.session_id, sessionToken: liveness.sessionToken ?? '' };
+      await settleCameraThen(() => onVerified?.(capture));
+      return;
+    }
     setEnrolling(true);
     console.log('[Liveness] Enrolling face, mode:', mode, 'personId:', personId);
     try {
@@ -554,12 +572,22 @@ export function LivenessCamera({
     rememberMemberPhoto,
     refreshAfterFaceChange,
     onSuccess,
+    onVerified,
     onReauthRequired,
     reauthGated,
     settleCameraThen,
     failWithCooldown,
     faceLimitKey,
   ]);
+
+  // Verify mode saves nothing here, so there is nothing to confirm: a passed
+  // capture goes straight back to the screen (once).
+  const verifiedSent = useRef(false);
+  useEffect(() => {
+    if (mode !== 'verify' || liveness.phase !== 'passed' || !liveness.result || verifiedSent.current) return;
+    verifiedSent.current = true;
+    void enrollFaceNow();
+  }, [mode, liveness.phase, liveness.result, enrollFaceNow]);
 
   // Finalizing starts right after the last step — often a head turn — so the
   // steadiness count starts over from here.
@@ -758,7 +786,7 @@ export function LivenessCamera({
     );
   }
 
-  const isFinalizing = liveness.phase === 'finalizing';
+  const isFinalizing = liveness.phase === 'finalizing' || (mode === 'verify' && liveness.phase === 'passed');
   const sessionExpiring = sessionLeft != null && sessionLeft > 0 && sessionLeft <= 60;
 
   // Finalize — high-res frame upload + anti-spoof checks. The Camera stays

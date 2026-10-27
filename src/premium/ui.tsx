@@ -834,6 +834,7 @@ export function Toggle({ on, onChange, disabled, label }: { on?: boolean; onChan
       accessibilityRole="switch"
       accessibilityLabel={label}
       accessibilityState={{ checked: !!on, disabled: !!disabled }}
+      aria-checked={!!on}
       hitSlop={8}
       style={disabled ? { opacity: 0.5 } : undefined}
     >

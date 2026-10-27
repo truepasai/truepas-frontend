@@ -26,6 +26,8 @@ import type {
     NotificationPreferences,
     NotificationType,
     PushDevice,
+    ReservationConsent,
+    ReservationConsentDecision,
     ResetPinRequest,
     RevokeSessionsResponse,
     SecurityScore,
@@ -157,6 +159,21 @@ const merchantLocations: Record<string, MerchantLocation[]> = {
 };
 /** As the BFF: a venue's category sets the reservation kind ('other' without one). */
 const kindOf = (m: MerchantSummary) => m.category ?? 'other';
+/** Each person's latest document-sharing decision, per reservation (as
+ *  checkin-consent-service keeps them; the holder's is the booking's own
+ *  documentReleaseConsent). */
+const reservationConsents: Record<string, Record<string, ReservationConsent>> = {};
+const consentProblem = (code: string, message: string, status = 422) =>
+  failHttp(status, { code, message, errors: { documentReleaseConsent: message } });
+const releasesEveryone = (merchantId: string | null | undefined) =>
+  merchants.find((m) => m.merchantId === merchantId)?.documentAccess === 'all_person_documents';
+/** As customer-account-service: a change of venue or dates ends every
+ *  decision on the reservation; deselecting someone ends theirs. */
+const endConsents = (bookingId: string, who?: string[]) => {
+  for (const c of Object.values(reservationConsents[bookingId] ?? {})) {
+    if (c.status === 'granted' && (!who || who.includes(c.personId))) c.status = 'ended';
+  }
+};
 const locationProblem = (message: string, code = 'LOCATION_UNAVAILABLE') =>
   failHttp(422, { code, message, errors: { locationId: message } });
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
@@ -692,6 +709,46 @@ export const mockApi = {
     });
     return respond(hits.slice(0, Math.min(limit, 10)));
   },
+  getMerchant: (merchantId: string): Promise<MerchantSummary> => {
+    const merchant = merchants.find((m) => m.merchantId === merchantId);
+    if (!merchant) return failHttp(404, { code: 'MERCHANT_UNAVAILABLE', message: 'Choose a TruePas venue from the search results.' });
+    return respond({ ...merchant, documentAccess: merchant.documentAccess ?? 'scanned_person_documents' });
+  },
+  getReservationConsents: (bookingId: string): Promise<ReservationConsent[]> => {
+    const b = bookings.find((x) => x.id === bookingId);
+    if (!b) return failHttp(404, { message: 'Reservation not found' });
+    const selected = b.checkedInMembers ?? [];
+    return respond(Object.values(reservationConsents[bookingId] ?? {}).filter((c) => selected.includes(c.personId)).map((c) => ({ ...c })));
+  },
+  /** Mock: the liveness capture can't be matched here, so any credentials count. */
+  decideReservationConsent: (bookingId: string, personId: string, payload: ReservationConsentDecision) => {
+    const b = bookings.find((x) => x.id === bookingId);
+    if (!b || b.source !== 'customer') return failHttp(404, { message: 'Reservation not found' });
+    if (b.status !== 'upcoming') return failHttp(409, { code: 'BOOKING_NOT_EDITABLE', message: 'Only upcoming reservations can be changed' });
+    if (personId === user.personId) return consentProblem('USE_RESERVATION_CONSENT', 'The account holder decides on the reservation itself.');
+    if (payload.decision === 'granted' && !releasesEveryone(b.merchantId)) {
+      return consentProblem('CONSENT_NOT_OFFERED', "This venue doesn't share documents between guests' check-ins.");
+    }
+    if (!payload.livenessSessionId || !payload.sessionToken) return failHttp(400, { message: 'livenessSessionId and sessionToken are required' });
+    const member = family.find((f) => f.id === personId);
+    if (!member) return failHttp(404, { message: 'Family member not found' });
+    if (member.age < 18) return consentProblem('CONSENT_ADULTS_ONLY', 'Only adults can share their own documents.');
+    // As customer-account-service: a face check can't tell twins apart.
+    if (payload.decision === 'granted' && member.isTwin) {
+      return consentProblem(
+        'TWIN_FACE_CONSENT_UNAVAILABLE',
+        "Face-only consent isn't available for twins, because a face check can't tell twins apart. Their documents aren't shared with the other guests' check-ins.",
+      );
+    }
+    if (!(b.checkedInMembers ?? []).includes(personId)) return consentProblem('CONSENT_NEEDS_SELECTION', 'Select this person on the reservation first.');
+    const current = (reservationConsents[bookingId] ??= {});
+    if (payload.decision === 'withdrawn') {
+      if (current[personId]?.status === 'granted') current[personId].status = 'withdrawn';
+    } else {
+      current[personId] = { personId, status: payload.decision, method: 'face_verified', decidedAt: new Date().toISOString() };
+    }
+    return respond({ personId, status: payload.decision });
+  },
   getMerchantLocations: (merchantId: string): Promise<MerchantLocation[]> => {
     if (!merchants.some((m) => m.merchantId === merchantId)) {
       return failHttp(404, { code: 'MERCHANT_UNAVAILABLE', message: 'Choose a TruePas venue from the search results.' });
@@ -712,6 +769,14 @@ export const mockApi = {
     if (!venue) return fail('Venue is required');
     if (payload.checkIn < todayStr) return fail('Check-in date cannot be in the past');
     if (payload.checkOut && payload.checkOut < payload.checkIn) return fail('Check-out must be on or after check-in');
+    if (payload.documentReleaseConsent) {
+      if (!(payload.memberIds ?? []).includes(user.personId ?? '')) {
+        return consentProblem('CONSENT_NEEDS_HOLDER', 'Select yourself to share your own documents.');
+      }
+      if (!releasesEveryone(merchant?.merchantId)) {
+        return consentProblem('CONSENT_NOT_OFFERED', "This venue doesn't share documents between guests' check-ins.");
+      }
+    }
     const booking: Booking = {
       id: nextId('res-'),
       source: 'customer',
@@ -733,6 +798,7 @@ export const mockApi = {
       linkedBookingId: null,
       createdAt: new Date().toISOString(),
       merchantId: merchant?.merchantId ?? null,
+      documentReleaseConsent: !!payload.documentReleaseConsent,
     };
     bookings = [booking, ...bookings];
     pushNotification('Reservation added', `${booking.venue}, ${booking.checkIn}`, 'booking', { type: 'booking', bookingId: booking.id });
@@ -750,9 +816,23 @@ export const mockApi = {
     const site = owner && patch.locationId ? (merchantLocations[owner.merchantId] ?? []).find((l) => l.locationId === patch.locationId) : undefined;
     if (moved && !patch.locationId) return locationProblem('Choose a location for this venue.', 'LOCATION_REQUIRED');
     if (patch.locationId && !site) return locationProblem("This location isn't available. Choose another one.");
-    const { memberIds, ...rest } = patch;
+    const { memberIds, documentReleaseConsent, ...rest } = patch;
     const updated: Booking = { ...b, ...rest, checkOut: patch.checkOut ?? b.checkOut, notes: patch.notes ?? b.notes };
     if (memberIds) updated.checkedInMembers = memberIds;
+    // As customer-account-service: another venue or other dates end every
+    // consent on it; someone deselected loses theirs; false withdraws the
+    // holder's; true (re)consents the holder, at a venue that releases everyone.
+    const nextMerchant = patch.merchantId !== undefined ? (merchant?.merchantId ?? null) : b.merchantId;
+    const rescoped = nextMerchant !== b.merchantId || (patch.checkIn != null && patch.checkIn !== b.checkIn)
+      || (patch.checkOut != null && patch.checkOut !== b.checkOut);
+    const holderSelected = (updated.checkedInMembers ?? []).includes(user.personId ?? '');
+    if (documentReleaseConsent && !holderSelected) return consentProblem('CONSENT_NEEDS_HOLDER', 'Select yourself to share your own documents.');
+    if (documentReleaseConsent && !releasesEveryone(nextMerchant)) {
+      return consentProblem('CONSENT_NOT_OFFERED', "This venue doesn't share documents between guests' check-ins.");
+    }
+    if (rescoped) endConsents(id);
+    else if (memberIds) endConsents(id, (b.checkedInMembers ?? []).filter((x) => !memberIds.includes(x)));
+    updated.documentReleaseConsent = documentReleaseConsent ?? (!!b.documentReleaseConsent && !rescoped && holderSelected);
     if (owner) {
       updated.kind = kindOf(owner);
       updated.location = site?.name ?? b.location;
@@ -769,6 +849,7 @@ export const mockApi = {
     if (!b) return fail('Booking not found');
     if (b.source !== 'customer' || b.status !== 'upcoming') return fail("This booking can't be changed any more.");
     bookings = bookings.filter((x) => x.id !== id);
+    delete reservationConsents[id];
     return respond({ ok: true });
   },
 

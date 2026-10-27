@@ -5,5 +5,5 @@
   { "merchantId": "mock-merchant-universal", "businessName": "Universal Studios", "category": null },
   { "merchantId": "mock-merchant-legoland", "businessName": "Legoland", "category": null },
   { "merchantId": "mock-merchant-six-flags", "businessName": "Six Flags", "category": null },
-  { "merchantId": "mock-merchant-royal-carib", "businessName": "Royal Caribbean Cruise", "category": "cruise" }
+  { "merchantId": "mock-merchant-royal-carib", "businessName": "Royal Caribbean Cruise", "category": "cruise", "documentAccess": "all_person_documents" }
 ]

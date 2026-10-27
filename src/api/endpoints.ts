@@ -27,6 +27,8 @@ import type {
     NotificationPreferences,
     NotificationType,
     PushDevice,
+    ReservationConsent,
+    ReservationConsentDecision,
     ResetPinRequest,
     RevokeSessionsResponse,
     SecurityScore,
@@ -550,8 +552,34 @@ export const realApi = {
     const { data } = await apiClient.get<MerchantLocation[]>(`/merchants/${encodeURIComponent(merchantId)}/locations`);
     return Array.isArray(data) ? data : [];
   },
+  /** One active venue (its documentAccess decides whether the reservation
+   *  form asks the holder for document consent). 404 MERCHANT_UNAVAILABLE. */
+  getMerchant: async (merchantId: string): Promise<MerchantSummary> => {
+    const { data } = await apiClient.get<MerchantSummary>(`/merchants/${encodeURIComponent(merchantId)}`);
+    return data;
+  },
   createReservation: async (payload: CreateReservationRequest): Promise<Booking> => {
     const { data } = await apiClient.post<Booking>('/bookings', payload);
+    return data;
+  },
+  /** Each selected person's own document-sharing decision on the reservation. */
+  getReservationConsents: async (bookingId: string): Promise<ReservationConsent[]> => {
+    const { data } = await apiClient.get<{ consents?: ReservationConsent[] }>(
+      `/bookings/${encodeURIComponent(bookingId)}/document-consents`,
+    );
+    return Array.isArray(data?.consents) ? data.consents : [];
+  },
+  /** An adult family member's own decision, verified by their live face.
+   *  403 FACE_NOT_VERIFIED when the face isn't theirs (nothing is saved). */
+  decideReservationConsent: async (
+    bookingId: string,
+    personId: string,
+    payload: ReservationConsentDecision,
+  ): Promise<{ personId: string; status: ReservationConsentDecision['decision'] }> => {
+    const { data } = await apiClient.post<{ personId: string; status: ReservationConsentDecision['decision'] }>(
+      `/bookings/${encodeURIComponent(bookingId)}/document-consents/${encodeURIComponent(personId)}`,
+      payload,
+    );
     return data;
   },
   updateReservation: async (id: string, patch: UpdateReservationRequest): Promise<Booking> => {

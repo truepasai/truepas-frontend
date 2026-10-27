@@ -7,6 +7,11 @@
  *    reservation it completed (linkedBookingId → GET /bookings/{id}).
  *  - the customer's own reservation (source 'customer'): kind, dates,
  *    guests, notes and status; upcoming ones can be edited or deleted.
+ *    "Who's going" lists the people selected, each with their own check-in
+ *    status from the kiosk check-ins linked to it (being selected is not
+ *    checking in). At a venue that releases everyone's documents, "Document
+ *    sharing" shows each person's own decision; an adult family member
+ *    decides on /booking/{id}/consent, the holder in the reservation form.
  * Photo header with venue + location, then the real facts. The Face
  * check-in card is information only: check-in happens at the venue kiosk.
  * "Before you go" keeps real readiness rows plus directions and sharing.
@@ -23,6 +28,7 @@ import {
   Pencil,
   ScanFace,
   Share2,
+  ShieldCheck,
   Timer,
   Trash2,
   Users,
@@ -37,7 +43,23 @@ import { useToast } from '@/components/composite/Toast';
 import { useMe } from '@/features/account/hooks';
 import { useDocuments } from '@/features/documents/hooks';
 import { useFamily } from '@/features/family/hooks';
-import { isEditableReservation, useBooking, useBookings, useDeleteReservation } from '@/features/history/hooks';
+import {
+  isEditableReservation,
+  useBooking,
+  useBookings,
+  useDeleteReservation,
+  useMerchant,
+  useReservationConsents,
+} from '@/features/history/hooks';
+import {
+  checkInLabel,
+  checkInsOn,
+  holderSharing,
+  memberSharing,
+  personCheckIn,
+  releasesEveryone,
+  type PersonCheckIn,
+} from '@/features/history/reservationConsent';
 import { useProfilePicture } from '@/features/profile/hooks';
 import { Guilloche } from '@/premium/blocks';
 import {
@@ -50,16 +72,17 @@ import {
   fmtDay,
   fmtSeconds,
   fmtTime,
+  isoDay,
   money,
   statusLabel,
   TravellerStack,
   whenLabel,
   yearOf,
 } from '@/premium/flows/home';
-import { Async, Banner, ConfirmSheet, EmptyView } from '@/premium/kit';
+import { Async, Banner, ConfirmSheet, EmptyView, Spinner } from '@/premium/kit';
 import { useHeroStatusBar } from '@/premium/statusBar';
 import { C, F, G, R, SH } from '@/premium/theme';
-import { Avatar, Badge, Card, Divider, Group, IconCircle, ListRow, Row, Screen, SectionHead, TopBar, Txt } from '@/premium/ui';
+import { Avatar, Badge, Card, Divider, Group, IconCircle, ListRow, Row, Screen, SectionHead, TextLink, TopBar, Txt } from '@/premium/ui';
 import { useAppSelector } from '@/store';
 import type { Booking, FamilyMember } from '@/types/domain';
 
@@ -86,6 +109,14 @@ export default function BookingDetailScreen() {
   }
 
   return <BookingDetail b={booking.data} refetch={() => void booking.refetch()} />;
+}
+
+const CHECK_IN_TONE = { checked_in: 'green', not_yet: 'neutral', missed: 'amber' } as const;
+
+/** The line under a person on "Who's going". */
+function checkInDetail(c: PersonCheckIn): string {
+  if (c.state === 'checked_in') return c.at ? `Checked in ${fmtDay(c.at)}, ${fmtTime(c.at)}` : 'Checked in at the venue kiosk';
+  return c.state === 'not_yet' ? 'Checks in with their face at the venue kiosk' : 'No check-in was recorded for them';
 }
 
 /** checkedInMembers carries person ids on Oct 2026 payloads (names on older
@@ -129,7 +160,20 @@ function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
      check-in row. */
   const isReservation = b.source === 'customer';
   const visited = (b.status === 'completed' || b.status === 'failed') && !isReservation;
+  // A kiosk check-in lists who checked in; anything else, who's going.
   const showMembers = visited || members.length > 0;
+  const selfPersonId = me?.personId;
+  /* Each selected person's own check-in: the completed kiosk check-ins linked
+     to this reservation, never the selection itself. */
+  const checkIns = checkInsOn(b, [...(bookingsList.data ?? []), linked.data]);
+  const today = isoDay();
+  /* Document sharing: at a venue whose check-ins release everyone's
+     documents, each person's own decision (and any still in force). */
+  const merchant = useMerchant(isReservation ? b.merchantId : null);
+  const allPerson = releasesEveryone(merchant.data?.documentAccess);
+  const consents = useReservationConsents(isReservation && b.merchantId ? b.id : null);
+  const anyShared = b.documentReleaseConsent === true || (consents.data ?? []).some((c) => c.status === 'granted');
+  const showSharing = isReservation && !!b.merchantId && members.length > 0 && (allPerson || anyShared);
 
   /* Face check-in card (information only — check-in is at the kiosk) */
   const faceEnrolled = !!user?.faceEnrolled;
@@ -317,10 +361,10 @@ function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
             </View>
           )}
 
-          {/* ---------- who's checked in ---------- */}
+          {/* ---------- who checked in (a kiosk check-in) / who's going (a reservation) ---------- */}
           {showMembers && (
             <View style={{ gap: 14 }}>
-              <SectionHead title={upcoming ? "Who's going" : 'Checked in'} />
+              <SectionHead title={isKioskCheckIn ? 'Checked in' : "Who's going"} />
               <Card pad={16}>
                 {members.length === 0 ? (
                   <Txt v="small">No one has checked in yet.</Txt>
@@ -328,18 +372,98 @@ function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
                   <View style={{ gap: 12 }}>
                     {members.map((x, i) => {
                       const name = memberName(x, user, family);
+                      if (isKioskCheckIn) {
+                        return (
+                          <Row key={`${x}-${i}`} gap={12}>
+                            <Avatar name={name} size={40} status={b.status === 'completed' ? 'verified' : undefined} />
+                            <Txt v="bodyStrong" lines={1} style={{ flex: 1 }}>
+                              {name}
+                            </Txt>
+                          </Row>
+                        );
+                      }
+                      const checkIn = personCheckIn(x, b, checkIns, today);
                       return (
                         <Row key={`${x}-${i}`} gap={12}>
-                          <Avatar name={name} size={40} status={upcoming ? undefined : 'verified'} />
-                          <Txt v="bodyStrong" lines={1} style={{ flex: 1 }}>
-                            {name}
-                          </Txt>
+                          <Avatar name={name} size={40} status={checkIn.state === 'checked_in' ? 'verified' : undefined} />
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <Txt v="bodyStrong" lines={1}>
+                              {name}
+                            </Txt>
+                            <Txt v="small">{checkInDetail(checkIn)}</Txt>
+                          </View>
+                          <Badge small label={checkInLabel(checkIn)} tone={CHECK_IN_TONE[checkIn.state]} />
                         </Row>
                       );
                     })}
                   </View>
                 )}
               </Card>
+            </View>
+          )}
+
+          {/* ---------- document sharing: each person's own decision ---------- */}
+          {showSharing && (
+            <View style={{ gap: 14 }}>
+              <SectionHead title="Document sharing" />
+              <Txt v="small">
+                {allPerson
+                  ? `When someone on this reservation checks in at ${b.venue}, the documents of the others who consented themselves are shared too. Choosing someone isn't consent, and children's documents are never shared.`
+                  : `${b.venue} no longer shares documents between guests' check-ins. Consents still in force can be withdrawn.`}
+              </Txt>
+              {consents.isPending ? (
+                <Row gap={10} style={{ paddingHorizontal: 4 }}>
+                  <Spinner size={18} />
+                  <Txt v="small">Loading who shares their documents…</Txt>
+                </Row>
+              ) : consents.isError ? (
+                <Row gap={8} style={{ flexWrap: 'wrap', paddingHorizontal: 4 }}>
+                  <Txt v="small" color={C.redInk}>
+                    {"Couldn't load who shares their documents."}
+                  </Txt>
+                  <TextLink label="Try again" onPress={() => void consents.refetch()} />
+                </Row>
+              ) : (
+                <Group>
+                  {members.map((x, i) => {
+                    const holder = !!selfPersonId && x === selfPersonId;
+                    const name = memberName(x, user, family);
+                    if (holder) {
+                      const sharing = holderSharing(b);
+                      const canChange = editable && (allPerson || sharing.shared);
+                      return (
+                        <ListRow
+                          key={`${x}-${i}`}
+                          icon={ShieldCheck}
+                          tone={sharing.shared ? 'green' : 'sky'}
+                          title={`${name} (you)`}
+                          sub={sharing.label}
+                          chevron={canChange}
+                          onPress={canChange ? edit : undefined}
+                        />
+                      );
+                    }
+                    const member = family.find((f) => f.id === x);
+                    const sharing = memberSharing(member, consents.data ?? []);
+                    const canAsk = editable && sharing.canDecide && (allPerson || sharing.shared);
+                    return (
+                      <ListRow
+                        key={`${x}-${i}`}
+                        icon={ShieldCheck}
+                        tone={sharing.shared ? 'green' : sharing.state === 'minor' || sharing.state === 'twin' ? 'neutral' : 'amber'}
+                        title={name}
+                        sub={sharing.label}
+                        chevron={canAsk}
+                        onPress={
+                          canAsk
+                            ? () => router.push({ pathname: '/booking/[id]/consent', params: { id: b.id, personId: x } } as never)
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                </Group>
+              )}
             </View>
           )}
 

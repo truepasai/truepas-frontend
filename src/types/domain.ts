@@ -165,17 +165,55 @@ export interface Booking {
   /** The merchant location the reservation is for (`location` is its name);
    *  null on older reservations. On a kiosk check-in, the kiosk's location. */
   locationId?: string | null;
+  /** The holder's own consent to release their documents with the other
+   *  selected guests' check-ins on this reservation (their documents only). */
+  documentReleaseConsent?: boolean;
 }
 
 /** A merchant's business category, which sets a reservation's kind. */
 export type MerchantCategory = 'hotel' | 'cruise' | 'car_rental';
 
-/** GET /merchants?q= — a TruePas venue the customer can reserve at. */
+/** Whose documents a venue's check-ins may release: the scanned person's
+ *  only, or also those of the other people selected on the reservation who
+ *  each consented (cruises only, once enabled and chosen by the merchant). */
+export type DocumentAccess = 'scanned_person_documents' | 'all_person_documents';
+
+/** GET /merchants?q= (and GET /merchants/{merchantId}) — a TruePas venue the
+ *  customer can reserve at. */
 export interface MerchantSummary {
   merchantId: string;
   businessName: string;
   /** Null until the merchant chooses one (the reservation kind is then 'other'). */
   category?: MerchantCategory | null;
+  /** The policy in force; anything else reads as scanned_person_documents. */
+  documentAccess?: DocumentAccess;
+}
+
+/** A person's own decision on sharing their documents with the other
+ *  selected guests' check-ins: granted (in force), declined, withdrawn (by
+ *  them), ended (the reservation's venue or dates changed, or they were
+ *  deselected) or expired (its dates passed). */
+export type ReservationConsentStatus = 'granted' | 'declined' | 'withdrawn' | 'ended' | 'expired';
+
+/** GET /bookings/{id}/document-consents — one entry per selected person who
+ *  decided; nobody listed has not decided. */
+export interface ReservationConsent {
+  personId: string;
+  status: ReservationConsentStatus;
+  /** 'account_holder' (in their own session) or 'face_verified'. */
+  method?: string | null;
+  decidedAt?: string | null;
+}
+
+/** POST /bookings/{id}/document-consents/{personId} — an adult family
+ *  member's own decision, after a liveness capture of their face (the BFF
+ *  matches it 1:1 against their enrolled face before anything is recorded). */
+export interface ReservationConsentDecision {
+  decision: 'granted' | 'declined' | 'withdrawn';
+  /** The consent text shown (RESERVATION_DOCUMENT_TERMS). */
+  termsVersion: string;
+  livenessSessionId: string;
+  sessionToken: string;
 }
 
 /** GET /merchants/{merchantId}/locations — an active location of the venue. */
@@ -204,6 +242,10 @@ export interface CreateReservationRequest {
   guests?: number;
   memberIds?: string[];
   notes?: string;
+  /** The holder's own consent (their documents only); offered only at an
+   *  all_person_documents venue with the holder selected. On update, false
+   *  withdraws it; another venue or other dates end it unless sent again. */
+  documentReleaseConsent?: boolean;
 }
 
 export type UpdateReservationRequest = Partial<CreateReservationRequest>;
