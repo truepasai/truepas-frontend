@@ -5,7 +5,7 @@
  * useNotificationCount (bell dot) / useAccountActivity (server feed) plus
  * the identity summary for the identity-card badge.
  *
- * Header avatar opens the profile drawer (account card + settings menu +
+ * Header avatar opens the Profile screen (account card + settings menu +
  * sign out / delete account); bell shows the unread dot; next upcoming
  * booking or reservation is the hero (check-in itself happens only at the
  * venue kiosk, so the hero has no check-in button); stacked family card
@@ -30,7 +30,6 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react-native';
-import { useState } from 'react';
 import { RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -54,7 +53,6 @@ import {
   FirstCheckInRow,
   greeting,
   isTodayIso,
-  ProfileDrawer,
   ReadyHero,
   TogetherCard,
   VENUES,
@@ -70,7 +68,6 @@ export default function HomeScreen() {
   const router = useRouter();
   const user = useAppSelector((state) => state.auth.user);
   const { url: avatarUri } = useProfilePicture();
-  const [drawer, setDrawer] = useState(false);
 
   const family = useFamily();
   // Photos that only made it to this phone get uploaded in the background.
@@ -155,7 +152,9 @@ export default function HomeScreen() {
           {/* ---------- greeting + identity ---------- */}
           <View style={{ paddingHorizontal: 20, paddingTop: 8, gap: 22 }}>
             <Row between>
-              <Press onPress={() => setDrawer(true)} label="Profile" role="button">
+              {/* Straight to the Profile screen (same account card and menu as
+                  the old drawer). The drawer's Modal never showed on iOS. */}
+              <Press onPress={open('/profile')} label="Profile" role="button">
                 <Row gap={12}>
                   <Avatar uri={avatarUri} name={user?.fullName} size={46} ring />
                   <View>
@@ -342,7 +341,6 @@ export default function HomeScreen() {
         </ScrollView>
       </SafeAreaView>
 
-      <ProfileDrawer visible={drawer} onClose={() => setDrawer(false)} />
       <AppLockOffer />
     </View>
   );
