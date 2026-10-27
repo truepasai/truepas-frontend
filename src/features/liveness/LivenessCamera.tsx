@@ -4,6 +4,7 @@ import {
     Animated,
     Easing,
     Linking,
+    Platform,
     StyleSheet,
     View
 } from 'react-native';
@@ -377,8 +378,16 @@ export function LivenessCamera({
 
     const leftEye = face.leftEyeOpenProbability ?? 1;
     const rightEye = face.rightEyeOpenProbability ?? 1;
-    const yaw = face.yawAngle ?? 0;
-    console.log(`[Liveness] Sample: leftEye=${leftEye.toFixed(2)} rightEye=${rightEye.toFixed(2)} yaw=${yaw.toFixed(1)}°`);
+    // Android hands ML Kit the unmirrored sensor image; on iOS the library
+    // tells ML Kit the front-camera frame is mirrored (`.leftMirrored`), which
+    // flips the yaw sign — a "turn left" there only passed when turning right.
+    // Normalize to the Android convention: positive = the subject's left.
+    const rawYaw = face.yawAngle ?? 0;
+    const yaw = Platform.OS === 'ios' && cameraPosition === 'front' ? -rawYaw : rawYaw;
+    console.log(
+      `[Liveness] Sample: leftEye=${leftEye.toFixed(2)} rightEye=${rightEye.toFixed(2)} yaw=${yaw.toFixed(1)}°` +
+        (yaw !== rawYaw ? ` (raw ${rawYaw.toFixed(1)}°, ${Platform.OS} ${cameraPosition})` : ''),
+    );
 
     const steady = steadyRef.current;
     const good =
@@ -389,7 +398,7 @@ export function LivenessCamera({
     steadyRef.current = { count: good ? steady.count + 1 : 0, lastYaw: yaw };
 
     onFaceSampleJS(leftEye, rightEye, yaw);
-  }, [onFaceSampleJS]);
+  }, [onFaceSampleJS, cameraPosition]);
 
   /* eslint-disable react-hooks/refs -- the output is created once for the
      Camera's outputs prop; its callbacks run on native face events and read
@@ -397,6 +406,10 @@ export function LivenessCamera({
   const faceDetectorOutput = useMemo(
     () =>
       createFaceDetectorOutput({
+        // Which camera is live: on iOS it picks the frame orientation (front
+        // = mirrored) ML Kit reads angles from. It defaulted to front even
+        // when an under-10 member switched to the back camera.
+        cameraFacing: cameraPosition,
         performanceMode: 'fast',
         runClassifications: true,
         runLandmarks: false,
@@ -405,7 +418,7 @@ export function LivenessCamera({
           console.warn('Face detection error:', error.message);
         },
       }),
-    [handleFaces],
+    [handleFaces, cameraPosition],
   );
   /* eslint-enable react-hooks/refs */
 
