@@ -1214,9 +1214,6 @@ export function WalletCard({ d, onPress, style }: { d: IdentityDocument; onPress
           </View>
           <View style={{ alignItems: 'flex-end', gap: 6 }}>
             {walletBadge(d.status)}
-            {d.matchScore != null && (
-              <Text style={{ fontFamily: F.semibold, fontSize: 12, color: 'rgba(255,255,255,0.75)' }}>{matchPct(d.matchScore)}% match</Text>
-            )}
           </View>
         </Row>
         <Row between align="flex-end">

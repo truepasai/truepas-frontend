@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { useDocumentImages } from '@/features/documents/hooks';
-import { DocumentCard, FlipCard, MatchRing, matchPct } from '@/premium/flows/documents';
+import { DocumentCard, FlipCard } from '@/premium/flows/documents';
 import { C } from '@/premium/theme';
 import { Button, Group, ListRow, Txt } from '@/premium/ui';
 import { ResultView } from '@/premium/views';
@@ -33,7 +33,6 @@ export default function DocumentVerifiedScreen() {
     docNumber,
     extractedName,
     extractedDob,
-    matchScore,
     issuingState,
     nationality,
     dateOfExpiry,
@@ -76,8 +75,6 @@ export default function DocumentVerifiedScreen() {
   // Prefer the real doc type (passed from processing); fall back to the label
   // heuristic for direct navigation without the param.
   const isLicense = (docType ?? docLabel ?? '').toLowerCase().includes('license');
-  // matchScore arrives 0–1 from the BFF; the ring renders a percentage.
-  const confidencePct = matchPct(matchScore);
 
   if (!allowed) return <Redirect href="/document/select-type" />;
 
@@ -175,8 +172,6 @@ export default function DocumentVerifiedScreen() {
           chevron={false}
         />
       </Group>
-
-      {confidencePct != null && <MatchRing value={confidencePct} sub="Returned by document verification" />}
     </ResultView>
   );
 }

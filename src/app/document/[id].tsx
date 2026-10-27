@@ -19,16 +19,12 @@ import { useToast } from '@/hooks/useToast';
 import {
     DocumentCard,
     FlipCard,
-    MatchRing,
-    docMeta,
     localDay,
-    matchPct,
     prettyDate,
-    statusBadge,
 } from '@/premium/flows/documents';
 import { Async, Bone, ConfirmSheet, EmptyView, SkeletonList } from '@/premium/kit';
 import { C, R } from '@/premium/theme';
-import { Badge, Button, Card, Group, ListRow, Row, Screen, TopBar, Txt } from '@/premium/ui';
+import { Button, Card, Group, ListRow, Row, Screen, TopBar, Txt } from '@/premium/ui';
 import { getDocumentImageUri } from '@/services/documentImageStore';
 import type { IdentityDocument } from '@/types/domain';
 
@@ -195,15 +191,12 @@ export default function DocumentDetailScreen() {
           skeleton={<DetailSkeleton />}
           emptyView={notFound}>
           {(d) => {
-            const meta = docMeta(d.type);
-            const pct = matchPct(d.matchScore);
             const expires = d.expiresAt ? d.expiresAt.split('T')[0] : null;
             const isLicense = d.type === 'drivingLicense';
             // A licence names its issuing state, other documents a nationality;
             // fall back to the other when only that one was read.
             const issuer = (isLicense ? d.issuingState || d.nationality : d.nationality || d.issuingState) || null;
             const issuerLabel = isLicense && d.issuingState ? 'Issuing state' : d.nationality ? 'Nationality' : 'Issuing state';
-            const badge = statusBadge(d.status);
             return (
               <>
                 {/* Flip card — front: credential card / back: captured scan */}
@@ -264,19 +257,11 @@ export default function DocumentDetailScreen() {
                   </Row>
                 </View>
 
-                {/* Verify card — match score + re-verify (only when a score exists) */}
-                {pct != null && (
-                  <MatchRing
-                    value={pct}
-                    label="Document match"
-                    sub={d.verifiedAt ? `${meta.label} · verified ${localDay(d.verifiedAt)}` : `${meta.label} · added ${prettyDate(d.addedAt)}`}
-                    right={<Badge label={badge.label} tone={badge.tone} icon={badge.icon} dot={badge.dot} />}
-                  />
-                )}
-
                 {/* One card, only rows with a value. Status sits on the card
-                    above, the match score in its ring, and the source is
-                    internal, so none of them repeat here. */}
+                    above and the source is internal, so neither repeats here.
+                    The face match score is not shown: it is an internal
+                    number, and next to "Verified" a low-looking percentage
+                    reads as a weak check. */}
                 <Group title="Details">
                   {d.extractedName ? <ListRow title="Holder" value={d.extractedName} chevron={false} /> : null}
                   {displayDocNumber(d.number) ? <ListRow title="Number" value={displayDocNumber(d.number)} chevron={false} /> : null}
