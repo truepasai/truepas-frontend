@@ -14,6 +14,8 @@
  *    face) → "Set up face" opens their face capture, then the document step
  *    again; unreadable/inconclusive → rescan; anything else → choose
  *    another document.
+ *  - not the member's document (expired, face or name differs — checked
+ *    here too when the server approves) → also discarded, with a popup.
  *  - request failed → Retry (reuses the created document).
  */
 import { useQueryClient } from '@tanstack/react-query';
@@ -27,6 +29,7 @@ import { api } from '@/api';
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
 import { documentKeys, refreshAfterVerify, useAddDocument } from '@/features/documents/hooks';
+import { isExpired, namesMatch } from '@/features/documents/identityChecks';
 import { errorFields, startDocLog, type DocLog } from '@/features/documents/verifyLog';
 import {
   DEFAULT_REJECTION_MESSAGE,
@@ -38,7 +41,7 @@ import {
 import { familyKeys, isTwin, memberCaptureMode, useFamilyMember } from '@/features/family/hooks';
 import { FaceRing, Medallion } from '@/premium/blocks';
 import { StepCard, stagedSteps } from '@/premium/flows/family';
-import { Banner } from '@/premium/kit';
+import { Banner, ConfirmSheet } from '@/premium/kit';
 import { C } from '@/premium/theme';
 import { Button, Footer, Heading, TopBar } from '@/premium/ui';
 import { clearDocumentImages, saveDocumentImages } from '@/services/documentImageStore';
@@ -58,6 +61,34 @@ const DOC_LABELS: Record<DocumentType, string> = {
 
 const STEP_LABELS = ['Adding document', 'Uploading photos', 'Verifying document'];
 
+/** Rejections shown as a popup: expired (app check), someone else's face
+ *  (DOCUMENT_FACE_MISMATCH), name differs (app check, or the server's
+ *  PROFILE_MISMATCH, which also covers date of birth). */
+type RejectKind = 'expired' | 'face' | 'name' | 'profile';
+
+const rejectCopy = (kind: RejectKind, first: string): { title: string; body: string } => {
+  const whose = first ? `${first}'s` : "this member's";
+  switch (kind) {
+    case 'expired':
+      return { title: 'This document has expired', body: "Expired documents can't be added. Scan one that's still valid." };
+    case 'face':
+      return {
+        title: `This isn't ${whose} document`,
+        body: `The photo on this document doesn't match ${whose} face. Scan ${whose} own document.`,
+      };
+    case 'name':
+      return {
+        title: "Name doesn't match",
+        body: `The name on this document doesn't match ${whose} name. Scan ${whose} own document.`,
+      };
+    case 'profile':
+      return {
+        title: "Details don't match",
+        body: `The name or date of birth on this document doesn't match ${whose} details. Scan ${whose} own document.`,
+      };
+  }
+};
+
 export default function FamilyProcessingScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -74,6 +105,8 @@ export default function FamilyProcessingScreen() {
   const [error, setError] = useState<string | null>(null);
   const [retryable, setRetryable] = useState(true);
   const [noScan, setNoScan] = useState(false);
+  // Set when the document isn't this member's — shows the popup.
+  const [rejected, setRejected] = useState<RejectKind | null>(null);
   const addDocument = useAddDocument();
   // Retry-safe: a retry after a failed upload/verify reuses the document.
   const createdDocRef = useRef<IdentityDocument | null>(null);
@@ -115,6 +148,22 @@ export default function FamilyProcessingScreen() {
     void queryClient.invalidateQueries({ queryKey: documentKeys.all });
   };
 
+  /** The member's full name for the name check — cached member, else GET
+   *  /family/{id}, else the route name. '' (no check) when none. */
+  const memberName = async (): Promise<string> => {
+    if (!personId) return '';
+    try {
+      const m = await queryClient.ensureQueryData({
+        queryKey: familyKeys.detail(personId),
+        queryFn: () => api.getFamilyMember(personId),
+      });
+      if (m?.name) return m.name;
+    } catch {
+      // Fall through to the route name.
+    }
+    return params.name ?? '';
+  };
+
   const refreshReads = (docId: string) => {
     // Documents, identity, security score, account activity, images.
     refreshAfterVerify(queryClient, docId);
@@ -130,6 +179,7 @@ export default function FamilyProcessingScreen() {
     setStatus('working');
     setError(null);
     setNoScan(false);
+    setRejected(null);
     const log = startDocLog({ flow: 'family', person: personId, type: docType, retry: attemptRef.current++ || undefined });
     try {
       const scan = getScanResult();
@@ -169,9 +219,17 @@ export default function FamilyProcessingScreen() {
         onStep: (s) => setStepIndex(s === 'uploading' ? 1 : 2),
         log,
       });
+      // The server doesn't check expiry, and its name check can pass a
+      // document that clearly isn't this member's — an approval failing
+      // either is discarded like a rejection.
+      let appCheck: 'expired' | 'name' | null = null;
+      if (isApproved(verdict)) {
+        if (isExpired(verdict.dateOfExpiry)) appCheck = 'expired';
+        else if (!namesMatch(await memberName(), verdict.extractedName)) appCheck = 'name';
+      }
       refreshReads(doc.id);
       clearScanResult();
-      if (isApproved(verdict)) {
+      if (isApproved(verdict) && !appCheck) {
         log.end('approved', { document: doc.id });
         setStatus('approved');
         void removeLeftovers(doc.id, log, sameTypeBefore);
@@ -194,9 +252,23 @@ export default function FamilyProcessingScreen() {
         log.warn('document not removed', { document: doc.id, ...errorFields(e) });
       }
       void removeLeftovers(doc.id, log, sameTypeBefore);
-      log.end('rejected', { reason: verdict.reasonCode, match: verdict.matchScore });
+      // Not this member's document (expired, someone else's face or name):
+      // a popup over the result. Other rejections keep their action below.
+      const kind: RejectKind | null =
+        appCheck ??
+        (verdict.reasonCode === 'DOCUMENT_FACE_MISMATCH'
+          ? 'face'
+          : verdict.reasonCode === 'PROFILE_MISMATCH'
+            ? 'profile'
+            : null);
+      log.end('rejected', {
+        reason: appCheck ? `app:${appCheck}` : verdict.reasonCode,
+        match: verdict.matchScore,
+        next: kind ? 'popup' : 'rejected',
+      });
       setResult(verdict);
       setStatus('rejected');
+      setRejected(kind);
     } catch (err) {
       const apiErr = toApiError(err);
       log.end('error', { ...errorFields(err), shown: apiErr.message });
@@ -309,6 +381,18 @@ export default function FamilyProcessingScreen() {
           </Footer>
         ) : null}
       </SafeAreaView>
+
+      <ConfirmSheet
+        visible={rejected != null}
+        danger
+        icon={TriangleAlert}
+        title={rejected ? rejectCopy(rejected, first).title : ''}
+        body={rejected ? rejectCopy(rejected, first).body : undefined}
+        confirmLabel="Scan again"
+        cancelLabel={backLabel}
+        onConfirm={rescan}
+        onCancel={memberPage}
+      />
     </View>
   );
 }
