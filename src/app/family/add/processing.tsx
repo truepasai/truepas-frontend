@@ -84,9 +84,10 @@ export default function FamilyProcessingScreen() {
   const memberPage = () =>
     personId ? router.dismissTo({ pathname: '/family/[id]', params: { id: personId } }) : router.dismissTo('/(tabs)');
 
-  /** After an approval: drop this member's earlier failed/unverified tries of
-   *  the same type (the server already removes older verified ones, §6.5),
-   *  and the phone scans of any copy the server dropped (`sameTypeBefore`). */
+  /** After a verify: drop this member's earlier failed/unverified tries of
+   *  the same type (after an approval the server already removes older
+   *  verified ones, §6.5), and the phone scans of any copy the server dropped
+   *  (`sameTypeBefore`). */
   const removeLeftovers = async (keepId: string, log: DocLog, sameTypeBefore: string[]) => {
     if (!personId) return;
     try {
@@ -181,6 +182,18 @@ export default function FamilyProcessingScreen() {
         }
         return;
       }
+      // Rejected: don't leave a "Not verified" copy on the member page — it
+      // reads as added. The reason is shown here; earlier unverified tries
+      // of this type go too (removeLeftovers keeps a verified one).
+      try {
+        await api.removeDocument(doc.id);
+        await clearDocumentImages(doc.id);
+        createdDocRef.current = null;
+        log.info('discarded this attempt', { document: doc.id });
+      } catch (e) {
+        log.warn('document not removed', { document: doc.id, ...errorFields(e) });
+      }
+      void removeLeftovers(doc.id, log, sameTypeBefore);
       log.end('rejected', { reason: verdict.reasonCode, match: verdict.matchScore });
       setResult(verdict);
       setStatus('rejected');

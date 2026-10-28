@@ -236,27 +236,28 @@ export default function DocumentProcessingScreen() {
           return;
         }
 
-        // Rejected. A VERIFIED document of this type stays the only one, so
-        // this failed attempt is discarded. Otherwise this attempt is the one
-        // worth keeping (it has the reason and what was read) — older
-        // unverified ones of the type (e.g. the old "PENDING" placeholders)
-        // are removed instead.
-        try {
-          const sameType = (await api.getDocuments() ?? []).filter((d) => d.type === docType && d.id !== doc.id);
-          const stale = sameType.some((d) => d.status === 'verified') ? [doc] : sameType;
-          for (const old of stale) {
-            try {
-              await api.removeDocument(old.id);
-              await clearDocumentImages(old.id);
-              if (old.id === doc.id) createdDocRef.current = null;
-              log.info(old.id === doc.id ? 'discarded this attempt (a verified one exists)' : 'removed older unverified', {
-                document: old.id,
-                status: old.status,
-              });
-            } catch (e) {
-              log.warn('document not removed', { document: old.id, ...errorFields(e) });
-            }
+        // Rejected: nothing of this attempt stays in the wallet — a "Failed"
+        // card there reads as "it was added" (e.g. someone else's document).
+        // The reason is shown on the next screen. Older unverified ones of
+        // the type (earlier failures, the old "PENDING" placeholders) go too;
+        // a VERIFIED one stays.
+        const attempt = doc;
+        const discard = async (old: IdentityDocument, what: string) => {
+          try {
+            await api.removeDocument(old.id);
+            await clearDocumentImages(old.id);
+            if (old.id === attempt.id) createdDocRef.current = null;
+            log.info(what, { document: old.id, status: old.status });
+          } catch (e) {
+            log.warn('document not removed', { document: old.id, ...errorFields(e) });
           }
+        };
+        await discard(attempt, 'discarded this attempt');
+        try {
+          const stale = (await api.getDocuments() ?? []).filter(
+            (d) => d.type === docType && d.id !== attempt.id && d.status !== 'verified',
+          );
+          for (const old of stale) await discard(old, 'removed older unverified');
         } catch (e) {
           log.warn('cleanup lookup failed', errorFields(e));
         }
