@@ -45,10 +45,23 @@ export interface UprightFrame {
  * The frame with a quarter-turn EXIF rotation baked into the pixels. The copy
  * is used only if it really came out turned (its aspect flipped); otherwise
  * the original goes up with its EXIF tag intact.
+ *
+ * A frame that isn't JPEG or PNG (e.g. HEIC from an iOS camera) is re-encoded
+ * as an upright JPEG — the backend can't decode anything else.
  */
 export async function uprightFrame(uri: string): Promise<UprightFrame> {
   const { header, label } = inspectImageFile(uri);
-  if (!header) return { uri, before: label, note: 'header unreadable, sent as captured' };
+  if (!header) {
+    try {
+      const out = await ImageManipulator.manipulateAsync(uri, [], {
+        compress: 0.95,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+      return { uri: out.uri, before: label, after: inspectImageFile(out.uri).label, note: 'not JPEG/PNG, re-encoded as JPEG' };
+    } catch (e) {
+      return { uri, before: label, note: `not JPEG/PNG, re-encode failed (${e instanceof Error ? e.message : String(e)}), sent as captured` };
+    }
+  }
   if (!isQuarterTurn(header.orientation)) return { uri, before: label, note: 'already upright' };
   try {
     const out = await ImageManipulator.manipulateAsync(uri, [], {

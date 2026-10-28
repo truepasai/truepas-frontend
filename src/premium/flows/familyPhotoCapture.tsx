@@ -62,7 +62,9 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
   // phone and capture the child with the rear camera.
   const [cameraPosition, setCameraPosition] = useState<'front' | 'back'>('front');
   const device = useCameraDevice(cameraPosition);
-  const photoOutput = usePhotoOutput();
+  // JPEG, not the 'native' default: that is HEIC on iOS, which the backend
+  // can't decode ("no face detected").
+  const photoOutput = usePhotoOutput({ containerFormat: 'jpeg' });
   const cameraRef = useRef<CameraRef>(null);
   const enrollFace = useEnrollFace();
   const updateFace = useUpdateFace();

@@ -144,7 +144,9 @@ export function LivenessCamera({
   // everyone else stays front-only per the age-band spec.
   const [cameraPosition, setCameraPosition] = useState<'front' | 'back'>('front');
   const device = useCameraDevice(cameraPosition);
-  const photoOutput = usePhotoOutput();
+  // JPEG, not the 'native' default: that is HEIC on iOS, which the backend
+  // can't decode ("Unsupported frame type" / "no face detected").
+  const photoOutput = usePhotoOutput({ containerFormat: 'jpeg' });
 
   const cameraRef = useRef<CameraRef>(null);
 
