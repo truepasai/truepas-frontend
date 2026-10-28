@@ -1,17 +1,18 @@
 /** @jsxImportSource react */
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { RotateCcw, ShieldCheck } from 'lucide-react-native';
+import { RotateCcw, ShieldCheck, TriangleAlert } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
 import { documentKeys, refreshAfterVerify, useAddDocument } from '@/features/documents/hooks';
+import { isExpired, namesMatch } from '@/features/documents/identityChecks';
 import { errorFields, startDocLog } from '@/features/documents/verifyLog';
 import { isApproved, verifyDocumentWithUploads, type VerifyUploadStep } from '@/features/documents/verifyWithUploads';
 import { DocumentCard, docMeta, ScanHero, StepList, type FlowStepState } from '@/premium/flows/documents';
-import { Banner } from '@/premium/kit';
+import { Banner, ConfirmSheet } from '@/premium/kit';
 import { C } from '@/premium/theme';
 import { Button, Heading, Row, Screen, TopBar, Txt } from '@/premium/ui';
 import { clearDocumentImages, saveDocumentImages } from '@/services/documentImageStore';
@@ -45,6 +46,30 @@ const STATUS_LINE: Record<ProcessingStatus, string> = {
   error: 'Verification failed',
 };
 
+/** Rejections shown as a popup: expired (app check), someone else's face
+ *  (DOCUMENT_FACE_MISMATCH), name differs (app check, or the server's
+ *  PROFILE_MISMATCH, which also covers date of birth). */
+type RejectKind = 'expired' | 'face' | 'name' | 'profile';
+
+const REJECT_COPY: Record<RejectKind, { title: string; body: string }> = {
+  expired: {
+    title: 'This document has expired',
+    body: "Expired documents can't be added. Scan one that's still valid.",
+  },
+  face: {
+    title: "This document isn't yours",
+    body: "The photo on this document doesn't match your face. You can only add your own documents.",
+  },
+  name: {
+    title: "Name doesn't match",
+    body: "The name on this document doesn't match the name on your profile. You can only add your own documents.",
+  },
+  profile: {
+    title: "Details don't match",
+    body: "The name or date of birth on this document doesn't match your profile. You can only add your own documents.",
+  },
+};
+
 /** Readable text for a thrown network/API error (not a verify rejection). */
 const errorText = (err: unknown): string => {
   const e = toApiError(err);
@@ -59,7 +84,8 @@ const errorText = (err: unknown): string => {
  *  1. POST /documents (no number — the server reads it from the scan)
  *  2. presigned upload of the captured image(s)
  *  3. verification session with the object keys → /verify (synchronous)
- *  4. approved → verified screen; rejected → reasonMessage + one action. */
+ *  4. approved → verified screen; not the holder's (expired, face, name) →
+ *     popup; other rejections → reasonMessage + one action. */
 export default function DocumentProcessingScreen() {
   const router = useRouter();
   const { type, label, expiresAt } = useLocalSearchParams<{
@@ -87,7 +113,8 @@ export default function DocumentProcessingScreen() {
   const addDocument = useAddDocument();
   const queryClient = useQueryClient();
   const profileName = useAppSelector((state) => state.auth.user?.fullName ?? '');
-  const profileDob = useAppSelector((state) => state.auth.user?.dateOfBirth ?? '');
+  // Set when the document isn't the holder's — shows the popup.
+  const [rejected, setRejected] = useState<RejectKind | null>(null);
   // Hero: the photo the user just captured (read once — the store is cleared
   // on completion). Display only; the upload reads the store in process().
   const [heroUri] = useState(() => {
@@ -183,7 +210,18 @@ export default function DocumentProcessingScreen() {
 
         clearScanResult();
 
-        if (isApproved(result)) {
+        // The server doesn't check expiry, and its name check can pass a
+        // document that clearly isn't the holder's — an approval failing
+        // either is discarded like a rejection.
+        const appCheck: Exclude<RejectKind, 'face'> | null = !isApproved(result)
+          ? null
+          : isExpired(result.dateOfExpiry)
+            ? 'expired'
+            : !namesMatch(profileName, result.extractedName)
+              ? 'name'
+              : null;
+
+        if (isApproved(result) && !appCheck) {
           // One per type (§6.5): the server removed older VERIFIED documents of
           // this type. Unverified leftovers of the same type (earlier failed or
           // pending attempts) are now noise — remove them too (best effort).
@@ -238,7 +276,7 @@ export default function DocumentProcessingScreen() {
 
         // Rejected: nothing of this attempt stays in the wallet — a "Failed"
         // card there reads as "it was added" (e.g. someone else's document).
-        // The reason is shown on the next screen. Older unverified ones of
+        // The reason is shown next (popup or screen). Older unverified ones of
         // the type (earlier failures, the old "PENDING" placeholders) go too;
         // a VERIFIED one stays.
         const attempt = doc;
@@ -263,26 +301,24 @@ export default function DocumentProcessingScreen() {
         }
         refreshAfterVerify(queryClient, doc.id);
 
+        // Not the holder's document (expired, someone else's face or name):
+        // a popup here. Other rejections keep their own screen and action.
+        const kind: RejectKind | null =
+          appCheck ??
+          (result.reasonCode === 'DOCUMENT_FACE_MISMATCH'
+            ? 'face'
+            : result.reasonCode === 'PROFILE_MISMATCH'
+              ? 'profile'
+              : null);
+
         log.end('rejected', {
-          reason: result.reasonCode,
+          reason: appCheck ? `app:${appCheck}` : result.reasonCode,
           match: result.matchScore,
-          next: result.reasonCode === 'PROFILE_MISMATCH' ? 'mismatch' : 'rejected',
+          next: kind ? 'popup' : 'rejected',
         });
         if (!stillHere()) return;
-        if (result.reasonCode === 'PROFILE_MISMATCH') {
-          // Name/DOB differ from the profile — compare them and offer to update.
-          flowGuards.grant('document:mismatch');
-          router.replace({
-            pathname: '/document/mismatch',
-            params: {
-              docType,
-              profileName,
-              profileDob,
-              docName: result.extractedName ?? '',
-              docDob: result.extractedDob ?? '',
-              reasonMessage: result.reasonMessage ?? '',
-            },
-          });
+        if (kind) {
+          setRejected(kind);
           return;
         }
 
@@ -335,6 +371,12 @@ export default function DocumentProcessingScreen() {
     else router.replace('/(tabs)/documents' as never);
   };
 
+  // Popup actions — the attempt is already discarded. The scan replaced
+  // itself with this screen, so a fresh one replaces this one.
+  const scanAgain = () =>
+    router.replace({ pathname: '/document/scan', params: { type: docType, label: docLabel, retake: String(Date.now()) } } as never);
+  const toWallet = () => router.dismissTo('/(tabs)/documents' as never);
+
   const failed = status === 'error';
   // Index-driven steps: before index → done, at index → active (failed on
   // error), after → pending.
@@ -357,7 +399,7 @@ export default function DocumentProcessingScreen() {
       }>
       <View style={{ alignItems: 'center', paddingTop: 6 }}>
         {heroUri ? (
-          <ScanHero uri={heroUri} scanning={!failed && status !== 'done'} />
+          <ScanHero uri={heroUri} scanning={!failed && !rejected && status !== 'done'} />
         ) : (
           <DocumentCard
             type={docType}
@@ -395,6 +437,18 @@ export default function DocumentProcessingScreen() {
         <ShieldCheck size={15} color={C.ink3} />
         <Txt v="small">Sent over an encrypted connection</Txt>
       </Row>
+
+      <ConfirmSheet
+        visible={rejected != null}
+        danger
+        icon={TriangleAlert}
+        title={rejected ? REJECT_COPY[rejected].title : ''}
+        body={rejected ? REJECT_COPY[rejected].body : undefined}
+        confirmLabel="Scan again"
+        cancelLabel="Back to documents"
+        onConfirm={scanAgain}
+        onCancel={toWallet}
+      />
     </Screen>
   );
 }

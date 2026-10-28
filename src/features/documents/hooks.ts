@@ -19,6 +19,10 @@ export function useDocuments(personId?: string) {
   return useQuery({
     queryKey: personId ? documentKeys.member(personId) : documentKeys.all,
     queryFn: () => api.getDocuments(personId),
+    // A failed verification isn't a document the user has — never show one.
+    // New rejections are deleted (document/processing); this hides older
+    // ones still on the server. The cache keeps them for that cleanup.
+    select: (docs) => docs?.filter((d) => d.status !== 'failed'),
     // Always refetch when the screen mounts — ensures newly added documents
     // show up even if cache invalidation timing is off.
     refetchOnMount: true,

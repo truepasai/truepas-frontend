@@ -31,6 +31,7 @@ This is the single list of everything the mobile app needs from the backend. It 
 | 15 | Document share link and usage history | P3 | open | Document detail |
 | 16 | Supported document types (incl. India) | P3 | open | Wallet "Add more", Add document |
 | 17 | Liveness contract: evidence body encoding and confirmations | P3 | open | Face scan (all) |
+| 38 | Reject expired documents on the server (`DOCUMENT_EXPIRED`) | P1 | new | Document processing |
 | **Family** | | | | |
 | 18 | Removed member can't be added again | P1 | open | Add family member |
 | 19 | Machine-readable duplicate error on `POST /family` | P2 | open | Add family member |
@@ -271,6 +272,16 @@ GET  /documents/{id}/usage  → [{ "venue": "…", "kind": "hotel", "usedAt": "I
   - Finalize: field name `frame`, JPEG only. Please share the max size and minimum resolution.
   - `antispoof_score`: is higher better, and may the app show it to users?
 - **Source:** `BUG_REPORT_LIVENESS_EVIDENCE.md`; `BACKEND_BLOCKERS_REPORT.md` Issue 1; `BACKEND_CONSOLIDATED_REPORT.md` C1–C6.
+
+### 38. Reject expired documents on the server — P1, new
+
+- **Today:** `/verify` can return `approved` for an expired document; there is no expiry reason code. Since 28 Oct 2026 the app checks `dateOfExpiry` itself and deletes an approved document that has expired (`src/app/document/processing.tsx`, `src/features/documents/identityChecks.ts`). It does the same when `extractedName` clearly differs from the profile name.
+- **Problem:** by the time the app sees the approval, the server has already removed the user's older **verified** document of that type (§6.5 one-per-type). An expired scan therefore costs the user their valid document.
+- **Needed:**
+  1. Reject expired documents in `/verify` with a new `reasonCode: "DOCUMENT_EXPIRED"`, before replacing any older document.
+  2. Return `dateOfExpiry` (ISO `yyyy-mm-dd`) on every passport and licence (see #9; it was always `null` on 6 Sep). Without it the app can't detect expiry at all.
+  3. Only replace the older verified document after every check has passed.
+- **Question:** how strict is the `PROFILE_MISMATCH` name check? The app accepts case, accent, punctuation and word-order differences, a missing middle name and initials (`namesMatch`). Please match that so the two sides agree.
 
 ---
 
