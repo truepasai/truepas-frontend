@@ -29,7 +29,8 @@
         "android.permission.USE_FINGERPRINT"
       ],
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF",
+        "backgroundColor": "#08B6FC",
+        "backgroundImage": "./assets/images/truepas-adaptive-background.png",
         "foregroundImage": "./assets/images/truepas-adaptive-foreground.png",
         "monochromeImage": "./assets/images/truepas-adaptive-monochrome.png"
       },
