@@ -95,9 +95,12 @@ export function CodeInput({
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         keyboardType="number-pad"
-        textContentType={dots ? "password" : "oneTimeCode"}
+        // No secureTextEntry / "password" for PINs: on a form that also has a
+        // new-password field (registration), iOS applies Automatic Strong
+        // Password to every secure field and locks it behind an overlay the
+        // user can't see on this invisible input. Masking comes from `dots`.
+        textContentType={dots ? "none" : "oneTimeCode"}
         autoComplete={dots ? "off" : "sms-otp"}
-        secureTextEntry={dots}
         maxLength={length}
         autoFocus={autoFocus}
         editable={!disabled}
