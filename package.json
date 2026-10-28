@@ -77,6 +77,7 @@
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "build:ios": "node ./scripts/bump-version.js && eas build -p ios --profile production --auto-submit",
     "web": "expo start --web",
     "lint": "expo lint",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/**/*.test.mjs\""
