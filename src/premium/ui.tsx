@@ -538,11 +538,14 @@ export function ListRow({
   onPress,
   danger,
   chevron = true,
+  fullSub,
 }: {
   icon?: LucideIcon;
   tone?: Parameters<typeof Tile>[0]["tone"];
   title: string;
   sub?: string;
+  /** Show the whole subtitle (e.g. an address) instead of clipping at 2 lines. */
+  fullSub?: boolean;
   value?: string;
   trailing?: ReactNode;
   onPress?: () => void;
@@ -558,7 +561,7 @@ export function ListRow({
             {title}
           </Txt>
           {sub != null && (
-            <Txt v="small" lines={2}>
+            <Txt v="small" lines={fullSub ? undefined : 2}>
               {sub}
             </Txt>
           )}

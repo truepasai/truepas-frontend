@@ -481,6 +481,7 @@ export function ReservationForm({
               tone="sky"
               title={d.locationId ? (chosenLocation?.name ?? d.location) || 'Location chosen' : 'Choose a location'}
               sub={chosenLocation?.address || undefined}
+              fullSub
               onPress={() => go(d.merchantId ? 'location' : 'venue')}
             />
             <ListRow
