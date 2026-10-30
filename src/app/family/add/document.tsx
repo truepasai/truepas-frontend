@@ -7,6 +7,12 @@
  * GET /documents/types/supported filtered by the member's age (§6.1), with
  * a fixed list when that fails. Hands off to /document/scan in family mode
  * with the member's personId → family/add/processing verifies it.
+ *
+ * Without a face yet (an under-5 photo still pending, or `prefer=
+ * birthCertificate` from the photo step's "Continue without photo") the birth
+ * certificate is preselected: it is the one document that doesn't need the
+ * face. The member stays "Face pending" — not verified, check-in frozen —
+ * until the photo is enrolled.
  */
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Check, ScanFace, ScanLine } from 'lucide-react-native';
@@ -42,7 +48,7 @@ const OPTIONS_ADULT: DocOption[] = [
 
 export default function FamilyDocumentScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ personId?: string; name?: string; age?: string; band?: FamilyAgeBand }>();
+  const params = useLocalSearchParams<{ personId?: string; name?: string; age?: string; band?: FamilyAgeBand; prefer?: string }>();
   const personId = params.personId || undefined;
   const { data: member } = useFamilyMember(personId);
   const supported = useSupportedDocumentTypes();
@@ -62,7 +68,11 @@ export default function FamilyDocumentScreen() {
         : OPTIONS_MINOR
       : null;
   const [selectedId, setSelectedId] = useState<DocumentType | null>(null);
-  const selected = options?.find((o) => o.id === selectedId) ?? options?.[0] ?? null;
+  // No face yet: start on the one document that doesn't need it.
+  const preferBirthCertificate = params.prefer === 'birthCertificate' || (!!member && !faceDone);
+  const fallback = (preferBirthCertificate ? options?.find((o) => o.id === 'birthCertificate') : undefined) ?? options?.[0];
+  const selected = options?.find((o) => o.id === selectedId) ?? fallback ?? null;
+  const photoMember = memberCaptureMode(member, age) === 'photo';
 
   if (!personId) return <Redirect href="/family/add" />;
 
@@ -112,9 +122,15 @@ export default function FamilyDocumentScreen() {
       {member && !faceDone ? (
         <Banner
           tone="warning"
-          title={`Set up ${first}'s face first`}
-          body="Photo documents are checked against their face. A birth certificate works without it."
-          action={<Button label="Set up face" tone="soft" size="sm" full={false} icon={ScanFace} onPress={setUpFace} />}
+          title={photoMember ? `${first}'s face photo is still pending` : `Set up ${first}'s face first`}
+          body={
+            photoMember
+              ? 'A birth certificate works without it. Passports and other photo IDs are checked against the face, so they need the photo first.'
+              : 'Photo documents are checked against their face. A birth certificate works without it.'
+          }
+          action={
+            <Button label={photoMember ? 'Take photo' : 'Set up face'} tone="soft" size="sm" full={false} icon={ScanFace} onPress={setUpFace} />
+          }
         />
       ) : (
         <Banner tone="info" body={`The photo on ${first}'s document is checked against their face.`} />

@@ -1,5 +1,6 @@
 import { realApi } from '@/api/endpoints';
 import { isBackendDown } from '@/api/errors';
+import { withMockFallback } from '@/api/fallbackPolicy';
 import { mockApi } from '@/api/mock';
 
 /**
@@ -25,23 +26,9 @@ const fallbackToMock = process.env.EXPO_PUBLIC_FALLBACK_TO_MOCK === 'true';
  */
 function withFallback<K extends keyof typeof realApi>(key: K) {
   const realFn = realApi[key] as (...args: any[]) => Promise<any>;
-  const mockFn = mockApi[key] as (...args: any[]) => Promise<any>;
-
-  if (!fallbackToMock) {
-    return realFn;
-  }
-
-  return async (...args: any[]) => {
-    try {
-      return await realFn(...args);
-    } catch (error) {
-      if (isBackendDown(error)) {
-        // Backend unreachable — fall back to mock data
-        return mockFn(...args);
-      }
-      throw error;
-    }
-  };
+  const mockFn = (mockApi as Partial<Record<string, (...args: any[]) => Promise<any>>>)[key];
+  // Face enrolment and its status reads never fall back (api/fallbackPolicy).
+  return withMockFallback(key, realFn, mockFn, { enabled: fallbackToMock, isBackendDown });
 }
 
 /**

@@ -21,6 +21,8 @@ import { hasReauthToken } from '@/services/reauth';
 import { ageFromDob } from '@/utils/age';
 import type { AddFamilyMemberRequest, FamilyAgeBand, FamilyMember, IdentityDocument } from '@/types/domain';
 
+import { isMemberFaceDone, memberSetupBadge } from './memberSetupState';
+
 export { ADULT_AGE, ageFromDob } from '@/utils/age';
 
 export const familyKeys = {
@@ -133,13 +135,17 @@ export function useRemoveFamilyMember() {
 
 /**
  * Add member creates the member before their face (POST /family on
- * Continue) and replaces itself with the capture screen. If that screen goes
- * away before the face is enrolled — back button, Android back, swipe or
- * anything else — the member is removed again, so a cancelled add leaves no
- * half-made member. Unmount, not a navigation event, is the trigger: it
- * fires however the screen is left. Call `markDone()` before navigating on
- * after a successful capture. Best effort: a failed delete leaves the member
- * with "Continue setup".
+ * Continue) and replaces itself with the capture screen. On the liveness
+ * step (5+), if that screen goes away before the face is enrolled — back
+ * button, Android back, swipe or anything else — the member is removed
+ * again, so a cancelled add leaves no half-made member. Unmount, not a
+ * navigation event, is the trigger: it fires however the screen is left.
+ * Call `markDone()` before navigating on after a successful capture. Best
+ * effort: a failed delete leaves the member with "Continue setup".
+ *
+ * The under-5 photo step doesn't use this: leaving it keeps the profile
+ * (face pending, a birth certificate still possible), and only its explicit
+ * "Cancel adding" removes the member (photoEnrollment canCancelNewMember).
  */
 export function useDiscardNewMemberOnLeave(personId: string | undefined, enabled: boolean) {
   const { mutateAsync: removeMember } = useRemoveFamilyMember();
@@ -401,19 +407,7 @@ export function useMemberFaceUpdateGate(isUpdate: boolean): boolean {
  *  expired / was refused (403 REAUTH_REQUIRED), or a failed update used it up. */
 export type ReauthReason = 'expired' | 'retry';
 
-/** Capture screen for a member: one photo under 5, liveness otherwise. */
-export function memberCaptureMode(m: Pick<FamilyMember, 'faceCaptureMode' | 'age'> | null | undefined, fallbackAge?: number): 'photo' | 'liveness' {
-  if (m?.faceCaptureMode) return m.faceCaptureMode;
-  const age = m?.age ?? fallbackAge;
-  return age != null && Number.isFinite(age) && age < 5 ? 'photo' : 'liveness';
-}
-
-/** The backend never moves a member's `verification` to 'verified' after
- *  face enrollment — it only flips `faceEnrolled`. Gating on 'verified'
- *  alone left "Continue setup" showing forever after a successful scan. */
-export function isMemberFaceDone(m: Pick<FamilyMember, 'faceEnrolled' | 'verification'>): boolean {
-  return m.faceEnrolled || m.verification === 'verified';
-}
+export { isMemberFaceDone, memberCaptureMode, offersBirthCertificateInstead } from './memberSetupState';
 
 export interface MemberSetup {
   /** Face enrolled (or a legacy member already marked 'verified'). */
@@ -469,14 +463,6 @@ export function useMemberSetup(member: FamilyMember | null | undefined): MemberS
   const pinNeeded = isTwin(member) && !member?.checkInPinSet;
   const setupDone = faceDone && docDone && !pinNeeded;
   const checking = faceDone && !docDone && docs.isPending;
-  const badge: Pick<MemberSetup, 'label' | 'tone'> = setupDone
-    ? { label: 'Verified', tone: 'green' }
-    : !faceDone
-      ? { label: 'Face pending', tone: 'amber' }
-      : checking
-        ? { label: 'Checking', tone: 'neutral' }
-        : !docDone
-          ? { label: 'Document needed', tone: 'amber' }
-          : { label: 'PIN needed', tone: 'amber' };
+  const badge = memberSetupBadge({ faceDone, docDone, pinNeeded, checking });
   return { faceDone, docDone, pinNeeded, setupDone, checking, ...badge };
 }

@@ -117,6 +117,9 @@ export interface FamilyMember {
   permissions?: FamilyPermissions;
   createdAt?: string | null;
   faceEnrolledAt?: string | null;
+  /** The enrolment attempt whose face is active (customer-account-service);
+   *  null when unknown. Photo-enrolment recovery matches it exactly. */
+  faceEnrollmentRef?: string | null;
   /** Signed photo URL when the member has a profile image (persons API). */
   profileImageUrl?: string | null;
   /** Twins only: their own check-in PIN is set (PUT /family/{id}/check-in-pin).
@@ -685,6 +688,15 @@ export interface FaceEnrollRequest {
   /** Under-5 members can't run liveness — send the captured photo instead. */
   selfieBase64?: string;
   personId?: string;
+  /** This attempt's reference, made on the phone before sending: the member's
+   *  record carries it once this attempt's face is the active one. */
+  enrollmentRef?: string;
+}
+
+/** A family member's face, as photo-enrolment recovery reads it. */
+export interface MemberFaceStatus {
+  faceEnrolled: boolean;
+  faceEnrollmentRef: string | null;
 }
 
 /** PUT /face — needs X-Reauth-Token from verify-pin (sent by the API layer).

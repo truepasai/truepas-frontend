@@ -52,6 +52,7 @@ import type {
     FaceResponse,
     FaceUpdateRequest,
     FamilyMember,
+    MemberFaceStatus,
     ForgotPasswordRequest,
     IdentityDocument,
     IdentitySummary,
@@ -329,6 +330,10 @@ export const mockApi = {
   getDocument: (id: string) => respond(documents.find((d) => d.id === id) ?? null),
   getFamily: () => respond(family),
   getFamilyMember: (id: string) => respond(family.find((f) => f.id === id) ?? null),
+  getFamilyMemberFaceStatus: (id: string): Promise<MemberFaceStatus> => {
+    const m = family.find((f) => f.id === id);
+    return respond({ faceEnrolled: m?.faceEnrolled === true, faceEnrollmentRef: m?.faceEnrollmentRef ?? null });
+  },
   getFamilyActivity: (id: string): Promise<ActivityLogItem[]> => {
     const m = family.find((f) => f.id === id);
     if (!m) return respond([]);
@@ -1001,7 +1006,11 @@ export const mockApi = {
   enrollFace: (payload: FaceEnrollRequest): Promise<FaceResponse> => {
     const now = new Date().toISOString();
     if (payload.personId) {
-      family = family.map((f) => (f.id === payload.personId ? { ...f, faceEnrolled: true, faceEnrolledAt: now } : f));
+      family = family.map((f) =>
+        f.id === payload.personId
+          ? { ...f, faceEnrolled: true, faceEnrolledAt: now, faceEnrollmentRef: payload.enrollmentRef ?? null }
+          : f,
+      );
     } else {
       user = { ...user, faceEnrolled: true, faceEnrolledAt: now };
     }

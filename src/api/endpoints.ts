@@ -53,6 +53,7 @@ import type {
     FaceResponse,
     FaceUpdateRequest,
     FamilyMember,
+    MemberFaceStatus,
     ForgotPasswordRequest,
     IdentityDocument,
     IdentitySummary,
@@ -204,6 +205,15 @@ export const realApi = {
   getFamilyMember: async (id: string): Promise<FamilyMember | null> => {
     const { data } = await apiClient.get<FamilyMember>(`/family/${id}`);
     return data;
+  },
+  /** GET /family/{id}, reduced to what photo-enrolment recovery reads. Never
+   *  answered from mock data when the call fails (api/fallbackPolicy). */
+  getFamilyMemberFaceStatus: async (id: string): Promise<MemberFaceStatus> => {
+    const { data } = await apiClient.get<FamilyMember>(`/family/${id}`);
+    return {
+      faceEnrolled: data?.faceEnrolled === true,
+      faceEnrollmentRef: typeof data?.faceEnrollmentRef === 'string' ? data.faceEnrollmentRef : null,
+    };
   },
   getFamilyActivity: async (id: string): Promise<ActivityLogItem[]> => {
     const { data } = await apiClient.get<unknown[]>(`/family/${id}/activity`);
@@ -741,8 +751,12 @@ export const realApi = {
   },
 
   // ── Face enrollment / update (via BFF /cb/face/*) ────────────────────
-  enrollFace: async (payload: FaceEnrollRequest): Promise<FaceResponse> => {
-    const { data } = await apiClient.post<FaceResponse>('/face/enroll', payload);
+  /** `requestId` (X-Request-ID) is the trace id the BFF and face service log
+   *  this attempt under; it is echoed as trace_id on errors. */
+  enrollFace: async (payload: FaceEnrollRequest, options?: { requestId?: string }): Promise<FaceResponse> => {
+    const { data } = await apiClient.post<FaceResponse>('/face/enroll', payload, {
+      headers: options?.requestId ? { 'X-Request-ID': options.requestId } : undefined,
+    });
     return data;
   },
   /** Needs the reauthToken from verifyPin (single use) — without it the
