@@ -46,21 +46,21 @@ export interface UprightFrame {
  * is used only if it really came out turned (its aspect flipped); otherwise
  * the original goes up with its EXIF tag intact.
  *
- * A frame that isn't JPEG or PNG (e.g. HEIC from an iOS camera) is re-encoded
- * as an upright JPEG — the backend can't decode anything else.
+ * A frame that isn't JPEG or PNG — an iPhone captures HEIC, which the face
+ * service can't read, and it would go up labelled image/jpeg — is converted
+ * to a real JPEG on the phone at the same size. If that fails, this throws
+ * rather than send a frame the server can't decode.
  */
 export async function uprightFrame(uri: string): Promise<UprightFrame> {
   const { header, label } = inspectImageFile(uri);
   if (!header) {
-    try {
-      const out = await ImageManipulator.manipulateAsync(uri, [], {
-        compress: 0.95,
-        format: ImageManipulator.SaveFormat.JPEG,
-      });
-      return { uri: out.uri, before: label, after: inspectImageFile(out.uri).label, note: 'not JPEG/PNG, re-encoded as JPEG' };
-    } catch (e) {
-      return { uri, before: label, note: `not JPEG/PNG, re-encode failed (${e instanceof Error ? e.message : String(e)}), sent as captured` };
-    }
+    const out = await ImageManipulator.manipulateAsync(uri, [], {
+      compress: 0.92,
+      format: ImageManipulator.SaveFormat.JPEG,
+    });
+    const converted = inspectImageFile(out.uri);
+    if (converted.header?.format !== 'jpeg') throw new Error('The photo could not be converted to JPEG.');
+    return { uri: out.uri, before: label, after: converted.label, note: 'converted to JPEG' };
   }
   if (!isQuarterTurn(header.orientation)) return { uri, before: label, note: 'already upright' };
   try {

@@ -5,10 +5,12 @@
  * one photo under 5 — POST /face/enroll), step 3 the document, which the
  * backend then checks against that enrolled face (backend §1.2/§7.1:
  * verifying a photo document for a member without a face is rejected with
- * FACE_NOT_ENROLLED). Leaving the face step before the face is enrolled
- * removes the new member again (useDiscardNewMemberOnLeave); after it, the
- * member page sits under the later steps, so backing out of them lands on
- * it with "Continue setup".
+ * FACE_NOT_ENROLLED). Leaving the liveness step (5+) before the face is
+ * enrolled removes the new member again (useDiscardNewMemberOnLeave).
+ * Leaving the under-5 photo step keeps them, face pending — a birth
+ * certificate needs no face — and only its "Cancel adding" removes them.
+ * After the face, the member page sits under the later steps, so backing
+ * out of them lands on it with "Continue setup".
  * A duplicate (same name + DOB) is caught here, before anything is created,
  * and so is an age that doesn't fit the relationship (relationshipAge.ts).
  * A Twin whose date of birth is more than a day from everyone's in the
@@ -71,9 +73,11 @@ export default function AddFamilyScreen() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   /** The face capture replaces this form (step 2 of 3). No member page
-   *  underneath yet: leaving the capture before the face is enrolled removes
-   *  the member (`fresh`, useDiscardNewMemberOnLeave); once it's enrolled the
-   *  capture puts the member page under the document step. */
+   *  underneath yet: leaving the liveness capture before the face is
+   *  enrolled removes the member (`fresh`, useDiscardNewMemberOnLeave); the
+   *  under-5 photo step keeps them, face pending. Once the face is enrolled
+   *  (or the photo step goes on without it) the member page goes under the
+   *  document step. */
   const openFaceStep = (member: FamilyMember, name: string) => {
     const age = Number.isFinite(member.age) ? member.age : ageFromDob(dob);
     const mode = memberCaptureMode(member, ageFromDob(dob));

@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 import { Redirect, useLocalSearchParams } from 'expo-router';
 
-import { useDiscardNewMemberOnLeave, useMemberFaceUpdateGate } from '@/features/family/hooks';
+import { useMemberFaceUpdateGate } from '@/features/family/hooks';
 import { CameraUnavailableView, loadFamilyPhotoCapture } from '@/premium/flows/family';
 
 /** Family member face — photo enrollment for under-5 members (step 2 of 3
@@ -10,23 +10,21 @@ import { CameraUnavailableView, loadFamilyPhotoCapture } from '@/premium/flows/f
  *  imports react-native-vision-camera, which throws on builds without
  *  NitroModules. `update=1` (member page → PIN screen) retakes an enrolled
  *  member's photo with PUT /face; without the PIN flag/token it bounces to
- *  /face-update/pin. A member fresh from Add member (`fresh=1`) is removed
- *  again if this screen goes before their photo enrolls — the hook sits
- *  here, not in the camera, so it holds when the camera can't load too. */
+ *  /face-update/pin. Leaving this screen never removes a member fresh from
+ *  Add member (`fresh=1`): their profile stays, face pending, and a birth
+ *  certificate is still possible. The camera's own "Cancel adding" is the
+ *  only way that removes them. */
 const Photo = loadFamilyPhotoCapture();
 
 export default function FamilyPhotoCaptureScreen() {
-  const { personId, name, age, update, next, fresh } = useLocalSearchParams<{
+  const { personId, name, age, update } = useLocalSearchParams<{
     personId?: string;
     name?: string;
     age?: string;
     update?: string;
-    next?: string;
-    fresh?: string;
   }>();
   const isUpdate = update === '1' && !!personId;
   const pinVerified = useMemberFaceUpdateGate(isUpdate);
-  const discard = useDiscardNewMemberOnLeave(personId, !isUpdate && next === 'document' && fresh === '1');
 
   if (isUpdate && !pinVerified) {
     return (
@@ -38,5 +36,5 @@ export default function FamilyPhotoCaptureScreen() {
       />
     );
   }
-  return Photo ? <Photo onEnrolled={discard.markDone} /> : <CameraUnavailableView />;
+  return Photo ? <Photo /> : <CameraUnavailableView />;
 }

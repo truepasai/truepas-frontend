@@ -7,6 +7,7 @@ import {
   EMPTY_DRAFT,
   draftFromBooking,
   guestsFor,
+  holderConsentOn,
   knownMemberIds,
   membersKnown,
   personName,
@@ -15,6 +16,7 @@ import {
   toPatch,
   toggleMember,
   validate,
+  withHolderConsent,
 } from '../reservationDraft.ts';
 
 const TODAY = '2026-10-26';
@@ -144,5 +146,65 @@ describe('editing an existing reservation', () => {
   it('older check-in rows that list names keep only known people', () => {
     const b = reservation({ source: 'checkin', checkedInMembers: ['Sarah Kim', 'person-maya', ME.personId] });
     assert.deepEqual(knownMemberIds(b, [MAYA], ME.personId), ['person-maya', 'person-self']);
+  });
+});
+
+describe("the holder's own document consent", () => {
+  const choice = (d, offered = true) => ({ offered, on: holderConsentOn(d, ME.personId) });
+
+  it('is off by default and never sent unless offered and turned on', () => {
+    const d = draft({ memberIds: [ME.personId, MAYA.id] });
+    assert.equal(holderConsentOn(d, ME.personId), false);
+    assert.equal('documentReleaseConsent' in toCreate(d, choice(d)), false);
+    const on = withHolderConsent(d, true);
+    assert.equal(toCreate(on, choice(on)).documentReleaseConsent, true);
+    // Not offered (a venue releasing only the scanned guest): nothing is sent.
+    assert.equal('documentReleaseConsent' in toCreate(on, choice(on, false)), false);
+  });
+
+  it('covers only the holder: it needs the holder selected and never mentions anyone else', () => {
+    const on = withHolderConsent(draft({ memberIds: [ME.personId, MAYA.id] }), true);
+    const holderLeft = { ...on, memberIds: [MAYA.id] };
+    assert.equal(holderConsentOn(holderLeft, ME.personId), false);
+    assert.equal('documentReleaseConsent' in toCreate(holderLeft, choice(holderLeft)), false);
+    assert.deepEqual(Object.keys(toCreate(on, choice(on))).filter((k) => /consent/i.test(k)), ['documentReleaseConsent']);
+  });
+
+  it('an existing consent opens on, and turning it off withdraws it', () => {
+    const original = draftFromBooking(reservation({ documentReleaseConsent: true }), 'cruise', [MAYA], ME.personId);
+    assert.equal(holderConsentOn(original, ME.personId), true);
+    assert.deepEqual(toPatch({ ...original }, original, choice(original)), {});
+    const off = withHolderConsent(original, false);
+    assert.deepEqual(toPatch(off, original, choice(off)), { documentReleaseConsent: false });
+    // Withdrawing is possible even where it would no longer be offered.
+    assert.deepEqual(toPatch(off, original, choice(off, false)), { documentReleaseConsent: false });
+  });
+
+  it('consenting later on an existing reservation sends it', () => {
+    const original = draftFromBooking(reservation(), 'cruise', [MAYA], ME.personId);
+    const on = withHolderConsent(original, true);
+    assert.deepEqual(toPatch(on, original, choice(on)), { documentReleaseConsent: true });
+  });
+
+  it('other dates or another venue show it off until confirmed again, and going back restores it', () => {
+    const original = draftFromBooking(reservation({ documentReleaseConsent: true }), 'cruise', [MAYA], ME.personId);
+    const moved = { ...original, checkIn: '2026-11-05' };
+    assert.equal(holderConsentOn(moved, ME.personId), false);
+    // Not re-confirmed: nothing about consent is sent (it ends upstream).
+    assert.deepEqual(toPatch(moved, original, choice(moved)), { checkIn: '2026-11-05' });
+    const confirmed = withHolderConsent(moved, true);
+    assert.deepEqual(toPatch(confirmed, original, choice(confirmed)), { checkIn: '2026-11-05', documentReleaseConsent: true });
+    // Back to the original dates: still on, nothing withdrawn by accident.
+    const back = { ...moved, checkIn: original.checkIn };
+    assert.equal(holderConsentOn(back, ME.personId), true);
+    assert.deepEqual(toPatch(back, original, choice(back)), {});
+    const otherVenue = { ...original, merchantId: 'merchant-2', venue: 'Other', locationId: 'location-9' };
+    assert.equal(holderConsentOn(otherVenue, ME.personId), false);
+  });
+
+  it('a policy that could not be read changes nothing', () => {
+    const original = draftFromBooking(reservation({ documentReleaseConsent: true }), 'cruise', [MAYA], ME.personId);
+    assert.deepEqual(toPatch({ ...original, notes: 'Window seat' }, original, choice(original, false)), { notes: 'Window seat' });
+    assert.deepEqual(toPatch({ ...original, notes: 'Window seat' }, original), { notes: 'Window seat' });
   });
 });

@@ -42,6 +42,7 @@ import {
   familyKeys,
   isTwin,
   memberCaptureMode,
+  offersBirthCertificateInstead,
   type MemberSetup,
   useFamilyMember,
   useMemberPhoto,
@@ -167,6 +168,15 @@ export default function FamilyMemberScreen() {
     router.push({
       pathname: '/family/add/document',
       params: { personId: id, name: first, age: String(m.age), band: m.ageBand },
+    } as never);
+  // Under 5, photo still pending: a birth certificate needs no face, so it
+  // can come first. The member stays "Face pending" until the photo.
+  const birthCertificateInstead = !!m && offersBirthCertificateInstead(m, setup);
+  const openBirthCertificate = () =>
+    m &&
+    router.push({
+      pathname: '/family/add/document',
+      params: { personId: id, name: first, age: String(m.age), band: m.ageBand, prefer: 'birthCertificate' },
     } as never);
   // Face first; the document step follows when it's still missing.
   const openFaceStep = () =>
@@ -386,6 +396,9 @@ export default function FamilyMemberScreen() {
 
           {!setupDone && (
             <Button label={continueLabel} icon={continueIcon} onPress={continueSetup} />
+          )}
+          {birthCertificateInstead && (
+            <Button label="Add a birth certificate instead" tone="white" icon={FileText} onPress={openBirthCertificate} />
           )}
           {setupDone && <Button label="Go to Family" icon={Users} onPress={goToFamily} />}
 

@@ -158,7 +158,9 @@ export function useFinalizeLiveness() {
 export function useEnrollFace() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: FaceEnrollRequest) => api.enrollFace(payload),
+    /** `requestId`: the X-Request-ID this attempt is logged under. */
+    mutationFn: ({ requestId, ...payload }: FaceEnrollRequest & { requestId?: string }) =>
+      api.enrollFace(payload, { requestId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user'] });
       queryClient.invalidateQueries({ queryKey: ['identity'] });

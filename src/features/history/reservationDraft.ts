@@ -7,7 +7,10 @@
  * (never the account `id`) — and the account's family members from
  * GET /family (its non-deleted dependants). The chosen person ids are the
  * reservation's `memberIds`; customer-account-service checks each belongs to
- * the account. The guest count is exactly the people chosen.
+ * the account. The guest count is exactly the people chosen. Choosing someone
+ * is never consent to share their documents: the holder's own consent is a
+ * separate switch (their documents only), and each other adult decides for
+ * themselves (reservationConsent.ts).
  */
 import type { Booking, BookingKind, CreateReservationRequest, FamilyMember, UpdateReservationRequest } from '@/types/domain';
 
@@ -32,6 +35,22 @@ export interface ReservationDraft {
   /** Person ids: you and/or family members. */
   memberIds: string[];
   notes: string;
+  /** The holder's switch: share their own documents with the other selected
+   *  guests' check-ins. Off by default. */
+  documentReleaseConsent: boolean;
+  /** The venue and dates the switch was turned on for (consentScopeOf): a
+   *  consent covers only those, so another venue or other dates show it off
+   *  until the holder turns it on again; going back to them restores it. */
+  consentScope: string | null;
+}
+
+/** The holder's switch as the form shows it, for toCreate / toPatch. */
+export interface ConsentChoice {
+  /** The venue releases everyone's documents (all_person_documents) and the
+   *  holder is selected: the switch can turn consent on. */
+  offered: boolean;
+  /** The switch as it applies to the draft now (holderConsentOn). */
+  on: boolean;
 }
 
 export type DraftErrors = Partial<Record<keyof ReservationDraft, string>>;
@@ -62,7 +81,35 @@ export const EMPTY_DRAFT: ReservationDraft = {
   guests: 1,
   memberIds: [],
   notes: '',
+  documentReleaseConsent: false,
+  consentScope: null,
 };
+
+/** What a consent covers: one venue and one date range. */
+export const consentScopeOf = (d: Pick<ReservationDraft, 'merchantId' | 'checkIn' | 'checkOut'>) =>
+  `${d.merchantId ?? ''}|${d.checkIn}|${d.checkOut || d.checkIn}`;
+
+/** Another venue or other dates: every consent on the reservation ends. */
+export const consentRescoped = (d: ReservationDraft, o: ReservationDraft) => consentScopeOf(d) !== consentScopeOf(o);
+
+/** The holder's switch as it applies now: on only for the venue and dates it
+ *  was turned on for, with the holder still selected. */
+export function holderConsentOn(d: ReservationDraft, selfPersonId?: string | null): boolean {
+  return (
+    d.documentReleaseConsent &&
+    d.consentScope === consentScopeOf(d) &&
+    !!d.merchantId &&
+    !!selfPersonId &&
+    d.memberIds.includes(selfPersonId)
+  );
+}
+
+/** Turning the holder's switch on or off, for the venue and dates chosen now. */
+export const withHolderConsent = (d: ReservationDraft, on: boolean): ReservationDraft => ({
+  ...d,
+  documentReleaseConsent: on,
+  consentScope: on ? consentScopeOf(d) : null,
+});
 
 export const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
 
@@ -106,7 +153,7 @@ export function membersKnown(b: Booking, family: FamilyMember[], selfPersonId?: 
 }
 
 export function draftFromBooking(b: Booking, kind: BookingKind, family: FamilyMember[], selfPersonId?: string): ReservationDraft {
-  return {
+  const d: ReservationDraft = {
     venue: b.venue ?? '',
     merchantId: b.merchantId ?? null,
     kind,
@@ -117,7 +164,10 @@ export function draftFromBooking(b: Booking, kind: BookingKind, family: FamilyMe
     guests: b.guests >= 1 ? b.guests : 1,
     memberIds: knownMemberIds(b, family, selfPersonId),
     notes: b.notes ?? '',
+    documentReleaseConsent: false,
+    consentScope: null,
   };
+  return b.documentReleaseConsent === true ? withHolderConsent(d, true) : d;
 }
 
 /** The guest count shown and sent: the people chosen. A reservation that
@@ -146,8 +196,9 @@ export function validate(d: ReservationDraft, today: string, original?: Reservat
 }
 
 /** Ids only: the venue, kind and location names come from the server. The
- *  guests are the people chosen. */
-export function toCreate(d: ReservationDraft): CreateReservationRequest {
+ *  guests are the people chosen. The holder's consent goes only when it was
+ *  offered and turned on. */
+export function toCreate(d: ReservationDraft, consent?: ConsentChoice): CreateReservationRequest {
   const p: CreateReservationRequest = {
     venue: d.venue.trim(),
     merchantId: d.merchantId ?? undefined,
@@ -158,13 +209,17 @@ export function toCreate(d: ReservationDraft): CreateReservationRequest {
   };
   if (d.checkOut) p.checkOut = d.checkOut;
   if (d.notes.trim()) p.notes = d.notes.trim();
+  if (consent?.offered && consent.on) p.documentReleaseConsent = true;
   return p;
 }
 
 /** Only what changed (PATCH accepts any subset). A change of who's going
  *  sends memberIds with the matching guest count; a stored count that
- *  disagrees with the people chosen is corrected. */
-export function toPatch(d: ReservationDraft, o: ReservationDraft): UpdateReservationRequest {
+ *  disagrees with the people chosen is corrected. The holder's consent: on
+ *  (where offered) when it wasn't, or again for another venue or other dates
+ *  (which end it upstream); off when it was on for this venue and these
+ *  dates. Without `consent` (or with it unchanged) nothing about it is sent. */
+export function toPatch(d: ReservationDraft, o: ReservationDraft, consent?: ConsentChoice): UpdateReservationRequest {
   const p: UpdateReservationRequest = {};
   // A venue sent without merchantId drops the merchant upstream, so a picked
   // venue always goes with its id (and, being another venue, its location).
@@ -178,5 +233,10 @@ export function toPatch(d: ReservationDraft, o: ReservationDraft): UpdateReserva
   if (!sameSet(d.memberIds, o.memberIds)) p.memberIds = d.memberIds;
   if (guestsFor(d) !== o.guests) p.guests = guestsFor(d);
   if (d.notes.trim() !== o.notes.trim()) p.notes = d.notes.trim();
+  if (consent) {
+    const rescoped = consentRescoped(d, o);
+    if (consent.on && consent.offered && (rescoped || !o.documentReleaseConsent)) p.documentReleaseConsent = true;
+    else if (!consent.on && o.documentReleaseConsent && !rescoped) p.documentReleaseConsent = false;
+  }
   return p;
 }

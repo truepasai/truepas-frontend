@@ -10,15 +10,19 @@
  *     guest count is exactly the people chosen.
  *  4. Dates — check-in a local YYYY-MM-DD not in the past ("today" is fine),
  *     check-out optional and on or after check-in.
- *  5. Review — every choice, notes, save.
+ *  5. Review — every choice, notes, save. At a venue that releases everyone's
+ *     documents (documentAccess all_person_documents) with you selected, a
+ *     switch asks for your own consent to share your documents with the
+ *     other selected guests' check-ins — off by default, your documents
+ *     only; each other adult decides for themselves from the reservation.
  * The venue's name, the reservation kind (from the venue's category) and the
  * location's name are set by the BFF from the merchant's own profile; the
  * app sends ids only. Editing opens on the review step. Draft, validation
  * and payloads live in reservationDraft.ts (unit-tested). Server field
  * errors land on their step, anything else (409 RESERVATION_LIMIT, 404
- * member) shows in the banner. Choosing who is going is not consent to
- * release anyone's documents. Check-in itself only ever happens at the venue
- * kiosk.
+ * member, 422 CONSENT_*) shows in the banner. Choosing who is going is not
+ * consent to release anyone's documents. Check-in itself only ever happens at
+ * the venue kiosk.
  */
 import {
   BadgeCheck,
@@ -29,23 +33,33 @@ import {
   ChevronRight,
   ChevronUp,
   MapPin,
+  ShieldCheck,
   Users,
 } from 'lucide-react-native';
 import { useState } from 'react';
 import { Keyboard, Pressable, TextInput, View, type TextStyle } from 'react-native';
 
 import { toApiError } from '@/api/errors';
-import { VENUE_SEARCH_MIN, useMerchantLocations, useVenueSearch } from '@/features/history/hooks';
+import { VENUE_SEARCH_MIN, useMerchant, useMerchantLocations, useVenueSearch } from '@/features/history/hooks';
+import {
+  TWIN_CONSENT_MESSAGE,
+  TWIN_CONSENT_UNAVAILABLE,
+  consentTerms,
+  releasesEveryone,
+} from '@/features/history/reservationConsent';
 import {
   NOTES_MAX,
+  consentRescoped,
   draftFromBooking as draftFrom,
   guestsFor,
+  holderConsentOn,
   personName,
   reservationPeople,
   toCreate,
   toPatch,
   toggleMember,
   validate,
+  withHolderConsent,
   type DraftErrors,
   type ReservationDraft,
   type ReservationPerson,
@@ -55,10 +69,11 @@ import { DateField } from '@/premium/flows/family';
 import { KIND_META, bookingKind, fmtDay, isoDay } from '@/premium/flows/home';
 import { Banner, Spinner } from '@/premium/kit';
 import { C, F, R } from '@/premium/theme';
-import { Button, Field, Group, Heading, ListRow, Row, Screen, Steps, TextLink, TopBar, Txt } from '@/premium/ui';
+import { Button, Card, Field, Group, Heading, ListRow, Row, Screen, Steps, TextLink, Toggle, TopBar, Txt } from '@/premium/ui';
 import type {
   Booking,
   CreateReservationRequest,
+  DocumentAccess,
   FamilyMember,
   MerchantLocation,
   MerchantSummary,
@@ -111,6 +126,8 @@ const STEP_OF: Record<FieldKey, Step> = {
   checkIn: 'dates',
   checkOut: 'dates',
   notes: 'review',
+  documentReleaseConsent: 'review',
+  consentScope: 'review',
 };
 
 const errorsOf = (errors: Errors, step: Step): Errors =>
@@ -136,6 +153,8 @@ const FIELD_OF: Record<string, FieldKey> = {
   memberIds: 'memberIds',
   member_ids: 'memberIds',
   notes: 'notes',
+  // 422 CONSENT_NEEDS_HOLDER / CONSENT_NEEDS_MERCHANT / CONSENT_NOT_OFFERED.
+  documentReleaseConsent: 'documentReleaseConsent',
 };
 
 const HEADINGS: Record<Step, { title: string; accent: string; sub: string }> = {
@@ -185,8 +204,27 @@ export function ReservationForm({
   const [venueTyped, setVenueTyped] = useState(false);
   const venueSearch = useVenueSearch(d.venue, venueTyped && !d.merchantId);
   const locations = useMerchantLocations(d.merchantId);
+  // Whose documents the venue's check-ins may release: from the search pick,
+  // else (editing, or a pick without it) GET /merchants/{id}.
+  const [pickedAccess, setPickedAccess] = useState<{ merchantId: string; access: DocumentAccess } | null>(null);
+  const knownAccess = pickedAccess && pickedAccess.merchantId === d.merchantId ? pickedAccess.access : undefined;
+  const merchant = useMerchant(knownAccess ? null : d.merchantId);
+  const access = knownAccess ?? merchant.data?.documentAccess;
   const index = STEPS.indexOf(step);
   const people = reservationPeople(self, family);
+  // The holder's own consent: offered at a venue that releases everyone's
+  // documents with you selected; an existing one can always be withdrawn.
+  const selfId = self?.personId ?? null;
+  const holderSelected = !!selfId && d.memberIds.includes(selfId);
+  // The server refused it because you are a twin (a face check can't tell
+  // twins apart): not offered again in this form.
+  const [holderTwin, setHolderTwin] = useState(false);
+  const consentOffered = releasesEveryone(access) && holderSelected && !!d.merchantId && !holderTwin;
+  const consentOn = holderConsentOn(d, selfId);
+  const consentWasOn = editing && initial.documentReleaseConsent;
+  const consentEnded = consentWasOn && consentRescoped(d, initial);
+  const consentShown = consentOffered || (consentWasOn && holderSelected && !consentEnded);
+  const consent = { offered: consentOffered, on: consentOn };
 
   const set = <K extends FieldKey>(k: K, v: ReservationDraft[K]) => {
     setD((prev) => ({ ...prev, [k]: v }));
@@ -202,6 +240,7 @@ export function ReservationForm({
 
   /** Another venue clears the previous one's location. */
   const pickVenue = (m: MerchantSummary) => {
+    if (m.documentAccess) setPickedAccess({ merchantId: m.merchantId, access: m.documentAccess });
     setD((prev) => ({
       ...prev,
       venue: m.businessName,
@@ -245,7 +284,7 @@ export function ReservationForm({
       return;
     }
 
-    const result = editing ? await onUpdate?.(toPatch(d, initial)) : await onCreate?.(toCreate(d));
+    const result = editing ? await onUpdate?.(toPatch(d, initial, consent)) : await onCreate?.(toCreate(d, consent));
     if (!result || result.ok) return;
 
     const err = toApiError(result.error);
@@ -264,6 +303,13 @@ export function ReservationForm({
     } else if (err.serverCode === 'LOCATION_REQUIRED' || err.serverCode === 'LOCATION_UNAVAILABLE') {
       setD((prev) => ({ ...prev, locationId: null, location: '' }));
       void locations.refetch();
+    } else if (err.serverCode === TWIN_CONSENT_UNAVAILABLE) {
+      setHolderTwin(true);
+      setD((prev) => withHolderConsent(prev, false));
+    } else if (err.serverCode === 'CONSENT_NOT_OFFERED') {
+      // The venue stopped releasing everyone's documents: re-read its policy.
+      setPickedAccess(null);
+      void merchant.refetch();
     }
     const failingStep = firstStepWith(fieldErrors);
     if (failingStep) setStep(failingStep);
@@ -451,11 +497,35 @@ export function ReservationForm({
             <ListRow
               icon={CalendarDays}
               tone="sky"
-              title={d.checkIn ? (d.checkOut && d.checkOut !== d.checkIn ? `${fmtDay(d.checkIn)} – ${fmtDay(d.checkOut)}` : fmtDay(d.checkIn)) : 'Choose the dates'}
+              title={d.checkIn ? reviewDates(d) : 'Choose the dates'}
               sub={d.checkOut ? undefined : 'Single day'}
               onPress={() => go('dates')}
             />
           </Group>
+          {consentShown && (
+            <HolderConsent
+              on={consentOn}
+              venue={d.venue}
+              dates={reviewDates(d)}
+              error={errors.documentReleaseConsent}
+              onChange={(on) => {
+                setD((prev) => withHolderConsent(prev, on));
+                if (errors.documentReleaseConsent) setErrors((prev) => ({ ...prev, documentReleaseConsent: undefined }));
+              }}
+            />
+          )}
+          {holderTwin && (
+            <Txt v="small" color={C.redInk} style={{ paddingHorizontal: 4 }}>
+              {`${TWIN_CONSENT_MESSAGE} Save without it, or go back.`}
+            </Txt>
+          )}
+          {consentEnded && holderSelected && (
+            <Txt v="small" style={{ paddingHorizontal: 4 }}>
+              {consentShown
+                ? 'Your consent to share your documents covered the original venue and dates. Turn it on again to share them for these.'
+                : 'Your consent to share your documents ends with this change of venue or dates.'}
+            </Txt>
+          )}
           <NotesField value={d.notes} onChange={(t) => set('notes', t)} error={errors.notes} />
         </View>
       )}
@@ -464,6 +534,55 @@ export function ReservationForm({
 }
 
 /* ───────────────────────── pieces ───────────────────────── */
+
+const reviewDates = (d: ReservationDraft) =>
+  d.checkOut && d.checkOut !== d.checkIn ? `${fmtDay(d.checkIn)} – ${fmtDay(d.checkOut)}` : fmtDay(d.checkIn);
+
+/** The holder's own consent: off by default, their documents only, with what
+ *  it shares, with whom and when (the same terms each other adult reviews). */
+function HolderConsent({
+  on,
+  venue,
+  dates,
+  error,
+  onChange,
+}: {
+  on: boolean;
+  venue: string;
+  dates: string;
+  error?: string;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <Card pad={16} style={error ? { borderColor: C.red } : undefined}>
+      <View style={{ gap: 12 }}>
+        <Row gap={12} align="flex-start">
+          <ShieldCheck size={20} color={C.skyPressed} />
+          <View style={{ flex: 1, gap: 4 }}>
+            <Txt v="bodyStrong">{"Share my documents with the others' check-ins"}</Txt>
+            <Txt v="small">
+              {"This covers only your own documents, not anyone else's. Each adult going decides about their own " +
+                'documents themselves, from the reservation.'}
+            </Txt>
+          </View>
+          <Toggle on={on} onChange={onChange} label="Share my documents with the other guests' check-ins" />
+        </Row>
+        <View style={{ gap: 6 }}>
+          {consentTerms({ venue, dates }).map((line) => (
+            <Txt key={line} v="small" color={C.ink3}>
+              {`• ${line}`}
+            </Txt>
+          ))}
+        </View>
+        {!!error && (
+          <Txt v="small" color={C.redInk}>
+            {error}
+          </Txt>
+        )}
+      </View>
+    </Card>
+  );
+}
 
 /** Matches under the venue field; pressing one picks it. */
 function VenueResults({

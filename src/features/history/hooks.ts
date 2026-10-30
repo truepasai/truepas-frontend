@@ -3,14 +3,57 @@ import { useEffect, useState } from 'react';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
-import type { Booking, CreateReservationRequest, UpdateReservationRequest } from '@/types/domain';
+import type { Booking, CreateReservationRequest, ReservationConsentDecision, UpdateReservationRequest } from '@/types/domain';
 
 export const historyKeys = {
   all: ['bookings'] as const,
   detail: (id: string) => ['bookings', id] as const,
   venues: (q: string) => ['merchants', 'search', q] as const,
   locations: (merchantId: string) => ['merchants', merchantId, 'locations'] as const,
+  merchant: (merchantId: string) => ['merchants', merchantId] as const,
+  consents: (bookingId: string) => ['bookings', bookingId, 'document-consents'] as const,
 };
+
+/** A 4xx is final; anything else is retried once. */
+const retryUnless4xx = (failureCount: number, error: unknown) => {
+  const status = toApiError(error).status;
+  return !(status != null && status >= 400 && status < 500) && failureCount < 1;
+};
+
+/** GET /merchants/{merchantId} — the venue's documentAccess, which decides
+ *  whether the holder is asked for document consent. Skipped without one. */
+export function useMerchant(merchantId: string | null | undefined) {
+  return useQuery({
+    queryKey: historyKeys.merchant(merchantId ?? ''),
+    queryFn: () => api.getMerchant(merchantId as string),
+    enabled: !!merchantId,
+    retry: retryUnless4xx,
+  });
+}
+
+/** GET /bookings/{id}/document-consents — each selected person's own
+ *  decision. Skipped (pass null) where nobody can be asked. */
+export function useReservationConsents(bookingId: string | null | undefined) {
+  return useQuery({
+    queryKey: historyKeys.consents(bookingId ?? ''),
+    queryFn: () => api.getReservationConsents(bookingId as string),
+    enabled: !!bookingId,
+    retry: retryUnless4xx,
+  });
+}
+
+/** POST /bookings/{id}/document-consents/{personId} — an adult family
+ *  member's own decision, with the liveness capture that proves it is them. */
+export function useDecideReservationConsent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ bookingId, personId, payload }: { bookingId: string; personId: string; payload: ReservationConsentDecision }) =>
+      api.decideReservationConsent(bookingId, personId, payload),
+    onSettled: (_data, _error, { bookingId }) => {
+      void qc.invalidateQueries({ queryKey: historyKeys.consents(bookingId) });
+    },
+  });
+}
 
 /** GET /merchants/{merchantId}/locations — the picked venue's active
  *  locations. Skipped without a venue. A 4xx (the venue is gone) is final. */
@@ -19,10 +62,7 @@ export function useMerchantLocations(merchantId: string | null) {
     queryKey: historyKeys.locations(merchantId ?? ''),
     queryFn: () => api.getMerchantLocations(merchantId as string),
     enabled: !!merchantId,
-    retry: (failureCount, error) => {
-      const status = toApiError(error).status;
-      return !(status != null && status >= 400 && status < 500) && failureCount < 1;
-    },
+    retry: retryUnless4xx,
   });
 }
 
