@@ -8,11 +8,11 @@
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
 import { CalendarCheck, House, type LucideIcon, ScanFace, Users, Wallet } from 'lucide-react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { openOnce } from '@/premium/openOnce';
 import { C, F, G, SH } from '@/premium/theme';
 import { Press } from '@/premium/ui';
 import { tapHaptic } from '@/services/haptics';
@@ -31,17 +31,6 @@ const RIGHT: Item[] = [
 ];
 
 type Route = BottomTabBarProps['state']['routes'][number];
-
-/** Family and the face button PUSH a screen, so a quick double tap opened it
- *  twice; taps within this window after an open are ignored. */
-const OPEN_GUARD_MS = 800;
-let lastOpenAt = 0;
-function openOnce(href: string) {
-  const now = Date.now();
-  if (now - lastOpenAt < OPEN_GUARD_MS) return;
-  lastOpenAt = now;
-  router.push(href as never);
-}
 
 export function PremiumTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();

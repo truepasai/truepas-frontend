@@ -16,7 +16,7 @@
  * photo cards but show the user's real setup progress (face / ID / family),
  * where TruePas works and how it works, instead of disappearing.
  */
-import { useRouter } from 'expo-router';
+import { useScrollToTop } from 'expo-router';
 import {
   Bell,
   CalendarDays,
@@ -30,7 +30,7 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react-native';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { RefreshControl, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -61,16 +61,19 @@ import {
   VenueCard,
 } from '@/premium/flows/home';
 import { Async, Bone, SkeletonList } from '@/premium/kit';
+import { openOnce } from '@/premium/openOnce';
 import { C, DESCENDERS, F, R } from '@/premium/theme';
 import { Avatar, Button, Card, Divider, IconCircle, Press, Row, SectionHead, Serif, Tile, Txt } from '@/premium/ui';
 import { useAppSelector } from '@/store';
 import type { VerificationStatus } from '@/types/domain';
 
 export default function HomeScreen() {
-  const router = useRouter();
   const user = useAppSelector((state) => state.auth.user);
   const { url: avatarUri } = useProfilePicture();
   const [drawer, setDrawer] = useState(false);
+  // Tapping the Home tab while on Home scrolls back to the top.
+  const scrollRef = useRef<ScrollView>(null);
+  useScrollToTop(scrollRef);
 
   const family = useFamily();
   // Photos that only made it to this phone get uploaded in the background.
@@ -130,7 +133,8 @@ export default function HomeScreen() {
     void feed.refetch();
   };
 
-  const open = (href: string) => () => router.push(href as never);
+  // openOnce: a double tap would otherwise push the screen twice.
+  const open = (href: string) => () => openOnce(href);
 
   /* Identity-card badge: the server-computed summary when we have it,
      otherwise the session's face-enrolment flag. */
@@ -147,6 +151,7 @@ export default function HomeScreen() {
     <View style={{ flex: 1, backgroundColor: C.canvas }}>
       <SafeAreaView edges={['top']} style={{ flex: 1 }}>
         <ScrollView
+          ref={scrollRef}
           style={{ flex: 1 }}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: TAB_BAR_SPACE + 20, gap: 30 }}
@@ -301,7 +306,7 @@ export default function HomeScreen() {
                     you={{ name: user?.fullName, uri: avatarUri, faceEnrolled: !!user?.faceEnrolled }}
                     onOpen={open('/family')}
                     onAdd={open('/family/add')}
-                    onMember={(id) => router.push(`/family/${id}` as never)}
+                    onMember={(id) => openOnce(`/family/${id}`)}
                   />
                 )}
               </Async>
