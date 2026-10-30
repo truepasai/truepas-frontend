@@ -176,12 +176,18 @@ export function Screen({
   );
 }
 
-/** Sticky bottom action area with a soft top fade. */
+/** Sticky bottom action area with a soft top fade. Always the last thing on
+ *  the screen, so it clears the navigation bar itself — its parent must not
+ *  pad the bottom edge too. Padding comes from the provider's insets, not a
+ *  native SafeAreaView: on Android that measured 0 when the footer mounted
+ *  mid-transition (Edit reservation, after loading), leaving the button
+ *  half under the navigation bar. */
 export function Footer({ children }: { children: ReactNode }) {
+  const insets = useSafeAreaInsets();
   return (
-    <SafeAreaView edges={["bottom"]} style={{ paddingHorizontal: S.gutter, paddingTop: 12, paddingBottom: 12, gap: 10 }}>
+    <View style={{ paddingHorizontal: S.gutter, paddingTop: 12, paddingBottom: 12 + insets.bottom, gap: 10 }}>
       {children}
-    </SafeAreaView>
+    </View>
   );
 }
 

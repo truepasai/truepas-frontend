@@ -230,7 +230,8 @@ export function DocScanView({
           <LinearGradient colors={['rgba(5,11,16,0.7)', 'rgba(5,11,16,0.2)', 'rgba(5,11,16,0.85)']} style={StyleSheet.absoluteFill} />
         </>
       )}
-      <SafeAreaView style={{ flex: 1 }}>
+      {/* A Footer clears the bottom edge itself; without one, this does. */}
+      <SafeAreaView edges={footer !== null ? ['top', 'left', 'right'] : undefined} style={{ flex: 1 }}>
         <TopBar
           tone="glass"
           title={topTitle}

@@ -47,7 +47,8 @@ export function FaceScanView({
   return (
     <View style={{ flex: 1, backgroundColor: C.navyNight }}>
       <LinearGradient colors={G.night} style={StyleSheet.absoluteFill} />
-      <SafeAreaView style={{ flex: 1 }}>
+      {/* The Footer clears the bottom edge itself. */}
+      <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1 }}>
         <TopBar tone="glass" title={topTitle} right={<Txt v="smallStrong" color="rgba(255,255,255,0.6)">{step}/{total}</Txt>} />
         <View style={{ paddingHorizontal: 24, paddingTop: 8 }}>
           <Steps total={total} current={step - 1} light />
@@ -209,7 +210,8 @@ export function ResultView({
 }) {
   return (
     <View style={{ flex: 1, backgroundColor: C.canvas }}>
-      <SafeAreaView style={{ flex: 1 }}>
+      {/* The Footer clears the bottom edge itself. */}
+      <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1 }}>
         {close ? <TopBar hideBack right={<View />} /> : <TopBar />}
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24, gap: 26, flexGrow: 1 }} showsVerticalScrollIndicator={false}>
           <View style={{ alignItems: "center", marginTop: 8 }}>
