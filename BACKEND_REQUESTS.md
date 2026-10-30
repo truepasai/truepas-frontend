@@ -490,6 +490,12 @@ PUT    /user/me/notification-preferences  (same shape)
 - **Suggested contract:** accept optional `"reason": "privacy|not_using|few_venues|other"` and `"comment"` on `DELETE /user/me`.
 - **Source:** new (Coming soon marker in the premium UI).
 
+### 39. Country-specific mobile number validation on register — P2, new
+
+- **Today:** since 30 Oct 2026 the app checks the national number against the picked country before `POST /cb/auth/register` (`mobileNumberError` in `src/features/auth/phone.ts`): India 10 digits starting 6–9, US 10, UK 10 starting 7, Australia 9 starting 4, China 11 starting 1, Japan 10 starting 60–90, Germany 10–11 starting 15–17, France 9 starting 6–7, UAE 9 starting 5, Singapore 8 starting 8–9, Pakistan 10 starting 3, Bangladesh 10 starting 13–19. Before, any 7–15 digits passed.
+- **Needed:** the same check on the server (QA BUG039 asks for both sides), so an older app build or a direct API call can't register an invalid number. Reject with `400` and a field error on `phone`, e.g. `reasonCode: "INVALID_PHONE_FOR_COUNTRY"`.
+- **Source:** QA BUG039 (30 Oct 2026).
+
 ---
 
 ## Appendix: closed items from older reports

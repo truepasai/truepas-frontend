@@ -10,7 +10,7 @@ import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
 import { DEFAULT_COUNTRY_CODE } from '@/constants/countries';
 import { useRegister } from '@/features/auth/mutations';
-import { normalizePhone } from '@/features/auth/phone';
+import { mobileNumberError, normalizePhone } from '@/features/auth/phone';
 import { PhoneForm, phoneSchema } from '@/features/auth/schemas';
 import { AuthScreen, CountryCodePicker, FlowBar, LinkRow, SIGNUP_STEPS } from '@/premium/flows/auth';
 import { Banner } from '@/premium/kit';
@@ -43,6 +43,11 @@ export default function RegisterScreen() {
       setError('phone', {
         message: parsed ? 'This number has a different country code — choose it from the list.' : 'Enter a valid phone number',
       });
+      return;
+    }
+    const numberError = mobileNumberError(parsed.national, countryCode);
+    if (numberError) {
+      setError('phone', { message: numberError });
       return;
     }
     const cleanPhone = parsed.national;

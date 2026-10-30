@@ -79,3 +79,31 @@ export function toLoginIdentifier(input: string, countryCode: string): string | 
   const value = input.trim();
   return value.includes('@') ? value : (normalizePhone(value, countryCode)?.e164 ?? null);
 }
+
+/** Mobile numbering per country in COUNTRIES (national part: no country
+ *  code, no trunk 0). Registration texts an OTP, so only mobile ranges pass. */
+const MOBILE_RULES: Record<string, { lengths: number[]; start: RegExp; message: string }> = {
+  '91': { lengths: [10], start: /^[6-9]/, message: 'Indian mobile numbers have 10 digits and start with 6–9.' },
+  '1': { lengths: [10], start: /^[2-9]\d{2}[2-9]/, message: 'US numbers have 10 digits (area code + number).' },
+  '44': { lengths: [10], start: /^7/, message: 'UK mobile numbers have 10 digits after the 0 and start with 7.' },
+  '61': { lengths: [9], start: /^4/, message: 'Australian mobile numbers have 9 digits after the 0 and start with 4.' },
+  '86': { lengths: [11], start: /^1/, message: 'Chinese mobile numbers have 11 digits and start with 1.' },
+  '81': { lengths: [10], start: /^[6-9]0/, message: 'Japanese mobile numbers have 10 digits after the 0 (70, 80 or 90…).' },
+  '49': { lengths: [10, 11], start: /^1[5-7]/, message: 'German mobile numbers have 10–11 digits after the 0 and start with 15, 16 or 17.' },
+  '33': { lengths: [9], start: /^[67]/, message: 'French mobile numbers have 9 digits after the 0 and start with 6 or 7.' },
+  '971': { lengths: [9], start: /^5/, message: 'UAE mobile numbers have 9 digits after the 0 and start with 5.' },
+  '65': { lengths: [8], start: /^[89]/, message: 'Singapore mobile numbers have 8 digits and start with 8 or 9.' },
+  '92': { lengths: [10], start: /^3/, message: 'Pakistani mobile numbers have 10 digits after the 0 and start with 3.' },
+  '880': { lengths: [10], start: /^1[3-9]/, message: 'Bangladeshi mobile numbers have 10 digits after the 0 and start with 1.' },
+};
+
+/**
+ * Registration check of a national number (normalizePhone().national)
+ * against the picked country's mobile numbering: the problem as a message,
+ * or null when it fits. A code without a rule keeps the generic 7–15 digits.
+ */
+export function mobileNumberError(national: string, countryCode: string): string | null {
+  const rule = MOBILE_RULES[countryCode.replace(/\D/g, '')];
+  if (!rule) return null;
+  return rule.lengths.includes(national.length) && rule.start.test(national) ? null : rule.message;
+}
