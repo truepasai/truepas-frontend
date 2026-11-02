@@ -27,7 +27,6 @@ import {
   KeyRound,
   ScanFace,
   Trash2,
-  UserCheck,
   Users,
   UserX,
 } from 'lucide-react-native';
@@ -53,7 +52,7 @@ import {
 } from '@/features/family/hooks';
 import { Glow, Guilloche } from '@/premium/blocks';
 import { ChecklistCard, DocRow, formatDate, type ChecklistStep } from '@/premium/flows/family';
-import { Async, Bone, ComingSoon, ConfirmSheet, EmptyView, SkeletonList } from '@/premium/kit';
+import { Async, Bone, ConfirmSheet, EmptyView, SkeletonList } from '@/premium/kit';
 import { useHeroStatusBar } from '@/premium/statusBar';
 import { C, DESCENDERS, F, SH } from '@/premium/theme';
 import { Badge, Button, Group, IconCircle, initials, ListRow, Screen, Toggle, TopBar, Txt, VerifiedTick } from '@/premium/ui';
@@ -501,16 +500,6 @@ export default function FamilyMemberScreen() {
                 />
               }
             />
-            {/* Stored by the backend but not enforced yet (consent review). */}
-            <View style={{ opacity: 0.55 }} accessibilityState={{ disabled: true }} accessibilityHint="Coming soon">
-              <ListRow
-                icon={UserCheck}
-                title="Check in independently"
-                sub="Without you present"
-                chevron={false}
-                trailing={<ComingSoon />}
-              />
-            </View>
           </Group>
 
           <Button
