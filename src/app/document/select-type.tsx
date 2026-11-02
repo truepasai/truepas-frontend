@@ -9,7 +9,7 @@ import { ageFromDob, useFamilyMember } from '@/features/family/hooks';
 import { DOC_META, docMeta } from '@/premium/flows/documents';
 import { Bone, EmptyView } from '@/premium/kit';
 import { C, F, R, SH } from '@/premium/theme';
-import { Badge, Heading, Press, Row, Screen, Steps, TopBar, Txt } from '@/premium/ui';
+import { Heading, Press, Row, Screen, Steps, TopBar, Txt } from '@/premium/ui';
 import { useAppSelector } from '@/store';
 import type { DocumentType } from '@/types/domain';
 
@@ -116,7 +116,6 @@ export default function AddDocumentScreen() {
             // Known types keep the app's label; a type the app doesn't know
             // yet shows the server label on the generic card.
             const title = DOC_META[t] ? d.label : (label ?? d.label);
-            const recommended = t === 'passport' && !isFamilyMode;
             return (
               <Press key={t} onPress={() => continueToUpload(t)} label={title} role="button" style={[{ borderRadius: R.lg }, SH.sm]}>
                 <View
@@ -137,10 +136,7 @@ export default function AddDocumentScreen() {
                     </View>
                   </View>
                   <View style={{ flex: 1, gap: 2 }}>
-                    <Row gap={8} style={{ flexWrap: 'wrap' }}>
-                      <Text style={{ fontFamily: F.bold, fontSize: 15.5, color: C.ink }}>{title}</Text>
-                      {recommended && <Badge label="Recommended" tone="sky" />}
-                    </Row>
+                    <Text style={{ fontFamily: F.bold, fontSize: 15.5, color: C.ink }}>{title}</Text>
                     {!!d.sub && <Txt v="small">{d.sub}</Txt>}
                   </View>
                   <ChevronRight size={18} color={C.ink4} />
