@@ -87,7 +87,8 @@ import { useAppSelector } from '@/store';
 import type { Booking, FamilyMember } from '@/types/domain';
 
 export default function BookingDetailScreen() {
-  const { id } = useLocalSearchParams<{ id?: string }>();
+  // from: the linked booking this screen was opened from (check-in ↔ reservation).
+  const { id, from } = useLocalSearchParams<{ id?: string; from?: string }>();
   const booking = useBooking(id);
 
   if (booking.data == null) {
@@ -108,7 +109,7 @@ export default function BookingDetailScreen() {
     );
   }
 
-  return <BookingDetail b={booking.data} refetch={() => void booking.refetch()} />;
+  return <BookingDetail b={booking.data} from={from} refetch={() => void booking.refetch()} />;
 }
 
 const CHECK_IN_TONE = { checked_in: 'green', not_yet: 'neutral', missed: 'amber' } as const;
@@ -129,7 +130,7 @@ function memberName(x: string, me: { id?: string; personId?: string; fullName?: 
   return /^[\w-]{16,}$/.test(x) && /\d/.test(x) ? 'Family member' : x;
 }
 
-function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
+function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetch: () => void }) {
   const router = useRouter();
   const { toast } = useToast();
   const sessionUser = useAppSelector((state) => state.auth.user);
@@ -481,7 +482,13 @@ function BookingDetail({ b, refetch }: { b: Booking; refetch: () => void }) {
                       ? 'The booking you added before your visit'
                       : 'Your check-in at the venue kiosk'
                 }
-                onPress={() => router.push({ pathname: '/booking/[id]', params: { id: b.linkedBookingId as string } } as never)}
+                onPress={() =>
+                  // Opened from the linked booking: go back to it rather than
+                  // stacking check-in → reservation → check-in → …
+                  from === b.linkedBookingId && router.canGoBack()
+                    ? router.back()
+                    : router.push({ pathname: '/booking/[id]', params: { id: b.linkedBookingId as string, from: b.id } } as never)
+                }
               />
             </Group>
           )}
