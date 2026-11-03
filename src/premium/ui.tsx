@@ -109,7 +109,13 @@ export function Press({
       onPressOut={() => to(1)}
       style={outer}
     >
-      <Animated.View style={[style, { marginTop: 0 }, outer.flex != null && { flex: 1 }, outer.width != null && { width: "100%" }, { transform: [{ scale }] }]}>{children}</Animated.View>
+      {/* Grow, but keep the content's height as the basis. The caller's
+          `flex: 1` (for the Row) would mean a 0 basis in this column
+          Pressable — Yoga ignores flexBasis "auto" while flex > 0 — so a
+          Button with flex: 1 in a Row measured 0 tall and spilled out of its
+          Footer, under the Android navigation bar (Add reservation "Next").
+          flex: 0 drops the shorthand; flexGrow still fills a taller Pressable. */}
+      <Animated.View style={[style, { marginTop: 0 }, outer.flex != null && { flex: 0, flexGrow: 1 }, outer.width != null && { width: "100%" }, { transform: [{ scale }] }]}>{children}</Animated.View>
     </Pressable>
   );
 }
