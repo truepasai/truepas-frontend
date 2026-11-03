@@ -4,12 +4,10 @@
  * Face-template status and the consent date come from the signed-in user
  * record. "Download my data" is hidden until the backend export worker runs
  * on every environment; the /account/export screen stays for then.
- * Usage-analytics sharing does nothing in the app yet → Coming soon.
  */
-import { BarChart3, FileText, Fingerprint, Lock, ScanFace, Trash2 } from 'lucide-react-native';
+import { FileText, Fingerprint, Lock, ScanFace, Trash2 } from 'lucide-react-native';
 import { View } from 'react-native';
 
-import { SoonRow } from '@/premium/flows/account';
 import { Badge, Card, Divider, go, Group, Heading, ListRow, Row, Screen, Tile, TopBar, Txt } from '@/premium/ui';
 import { useAppSelector } from '@/store';
 
@@ -92,7 +90,6 @@ export default function DataPrivacyScreen() {
           sub={consentAt ? `Granted · ${formatTimestamp(consentAt)}` : 'Not granted'}
           onPress={go('/security')}
         />
-        <SoonRow icon={BarChart3} tone="sky" title="Share usage analytics" sub="Help improve TruePas" />
       </Group>
 
       <Group title="Policies">

@@ -3,8 +3,7 @@
  * About TruePas — brand header (real app version from expo-constants), what
  * TruePas offers, mission, contact and legal links. Contact options come
  * from GET /support/channels (null channels hidden; the default email shows
- * only while that call loads or fails). "Rate TruePas" has no store listing
- * yet → Coming soon.
+ * only while that call loads or fails).
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -17,7 +16,6 @@ import {
   ScanFace,
   Shield,
   ShieldCheck,
-  Star,
   Users,
   Zap,
   type LucideIcon,
@@ -27,7 +25,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Glow, Guilloche, Wordmark } from '@/premium/blocks';
-import { APP_VERSION, callSupport, emailSupport, openSupportChat, SoonRow, useSupportContact } from '@/premium/flows/account';
+import { APP_VERSION, callSupport, emailSupport, openSupportChat, useSupportContact } from '@/premium/flows/account';
 import { useHeroStatusBar } from '@/premium/statusBar';
 import { C, F, G } from '@/premium/theme';
 import { Card, Divider, go, Group, ListRow, Serif, Tile, TopBar, Txt } from '@/premium/ui';
@@ -136,25 +134,26 @@ export default function AboutScreen() {
           </View>
 
           {/* ---------- contact ---------- */}
-          <Group title="Get in touch">
-            {!!support.email && (
-              <ListRow
-                icon={Mail}
-                tone="sky"
-                title="Email support"
-                sub={support.email}
-                onPress={() => emailSupport(support.email ?? undefined)}
-              />
-            )}
-            {!!support.phone && (
-              <ListRow icon={Phone} tone="sky" title="Call support" sub={support.phone} onPress={() => callSupport(support.phone as string)} />
-            )}
-            {!!support.chatUrl && (
-              <ListRow icon={MessageCircle} tone="sky" title="Chat with us" onPress={() => openSupportChat(support.chatUrl as string)} />
-            )}
-            {!!support.hours && <ListRow icon={Clock} tone="sky" title="Support hours" sub={support.hours} chevron={false} />}
-            <SoonRow icon={Star} tone="sky" title="Rate TruePas" />
-          </Group>
+          {(!!support.email || !!support.phone || !!support.chatUrl || !!support.hours) && (
+            <Group title="Get in touch">
+              {!!support.email && (
+                <ListRow
+                  icon={Mail}
+                  tone="sky"
+                  title="Email support"
+                  sub={support.email}
+                  onPress={() => emailSupport(support.email ?? undefined)}
+                />
+              )}
+              {!!support.phone && (
+                <ListRow icon={Phone} tone="sky" title="Call support" sub={support.phone} onPress={() => callSupport(support.phone as string)} />
+              )}
+              {!!support.chatUrl && (
+                <ListRow icon={MessageCircle} tone="sky" title="Chat with us" onPress={() => openSupportChat(support.chatUrl as string)} />
+              )}
+              {!!support.hours && <ListRow icon={Clock} tone="sky" title="Support hours" sub={support.hours} chevron={false} />}
+            </Group>
+          )}
 
           {/* ---------- legal ---------- */}
           <Group title="Legal">

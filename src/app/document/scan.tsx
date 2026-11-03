@@ -490,7 +490,7 @@ export default function DocumentScanScreen() {
           onPress={() => setTorch((t) => !t)}
         />
       }
-      gallery="soon"
+      gallery="hide"
       onCapture={handleCapture}
       capturing={capturing}
       captureLabel="Capture document"
