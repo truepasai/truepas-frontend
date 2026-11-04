@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { KeyRound, Mail, MailCheck, ScanFace, ShieldCheck } from 'lucide-react-native';
+import { KeyRound, Mail, MailCheck, ShieldCheck } from 'lucide-react-native';
 import { useState } from 'react';
 import { View } from 'react-native';
 
@@ -9,9 +9,8 @@ import { useForgotPassword, useResetPassword } from '@/features/auth/mutations';
 import { newPasswordSchema } from '@/features/auth/schemas';
 import { useToast } from '@/hooks/useToast';
 import { AuthScreen, OtpScreen, PasswordField } from '@/premium/flows/auth';
-import { Banner, ComingSoon } from '@/premium/kit';
-import { C, R } from '@/premium/theme';
-import { Button, Field, Heading, Row, Tile, TopBar, Txt } from '@/premium/ui';
+import { Banner } from '@/premium/kit';
+import { Button, Field, Heading, Tile, TopBar } from '@/premium/ui';
 
 type Step = 'email' | 'otp' | 'reset';
 
@@ -142,24 +141,6 @@ export default function ForgotPasswordScreen() {
           error={emailError}
           inputProps={{ autoCapitalize: 'none', autoCorrect: false, autoComplete: 'email', textContentType: 'emailAddress' }}
         />
-        {/* Face-based recovery has no backend endpoint yet — shown, but inert. */}
-        <View
-          accessibilityState={{ disabled: true }}
-          accessibilityHint="Coming soon"
-          style={{ backgroundColor: C.skyMist, borderRadius: R.lg, padding: 16, borderWidth: 1, borderColor: C.skyWash }}>
-          <Row gap={14} align="flex-start">
-            <View style={{ opacity: 0.55 }}>
-              <Tile icon={ScanFace} tone="navy" size={44} />
-            </View>
-            <View style={{ flex: 1, gap: 6 }}>
-              <View style={{ gap: 2, opacity: 0.7 }}>
-                <Txt v="bodyStrong">Faster: recover with your face</Txt>
-                <Txt v="small">Verify it&apos;s you in seconds — no email needed.</Txt>
-              </View>
-              <ComingSoon />
-            </View>
-          </Row>
-        </View>
       </AuthScreen>
     );
   }
