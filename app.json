@@ -77,7 +77,8 @@
         }
       ],
       "./plugins/withRegulaMaven",
-      "./plugins/withRegulaLicense"
+      "./plugins/withRegulaLicense",
+      "@regulaforensics/face-sdk"
     ],
     "experiments": {
       "typedRoutes": true,

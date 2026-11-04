@@ -23,6 +23,18 @@ describe('the enrolment calls never fall back to mock data', () => {
   }
 });
 
+describe('Regula liveness calls never fall back to mock data', () => {
+  // A mock "server runs the challenge" or "passed" must never replace the
+  // real server's Regula answer.
+  for (const key of ['createRegulaLivenessSession', 'uploadRegulaLivenessFrame', 'completeRegulaLiveness']) {
+    it(`${key}: the real failure reaches the screen`, async () => {
+      assert.ok(NO_MOCK_FALLBACK.has(key));
+      const call = withMockFallback(key, failing, async () => ({ success: true, status: 'passed' }), { enabled: true, isBackendDown });
+      await assert.rejects(call(), (error) => error === backendDown);
+    });
+  }
+});
+
 describe('other calls keep the opt-in fallback', () => {
   it('falls back only when enabled and only when the backend is down', async () => {
     const enabled = withMockFallback('getFamily', failing, async () => ['mock'], { enabled: true, isBackendDown });

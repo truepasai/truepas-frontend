@@ -1,5 +1,6 @@
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
 
+import { memberCaptureMode } from '@/features/family/memberSetupState';
 import { clearReauthToken, peekReauthToken, setReauthToken, takeReauthToken } from '@/services/reauth';
 import type {
     AccountDetailsRequest,
@@ -61,6 +62,9 @@ import type {
     LivenessEvidenceRequest,
     LivenessEvidenceResponse,
     LivenessFinalizeResponse,
+    RegulaCompleteResponse,
+    RegulaFrameResponse,
+    RegulaLivenessSession,
     LoginRequest,
     LogoutRequest,
     Notification,
@@ -665,7 +669,7 @@ export const mockApi = {
       verification: ageBand === '0-4' ? 'Doc Verified' : 'Face + Doc Verified',
       turning18Soon: age === 17,
       faceEnrolled: false,
-      faceCaptureMode: age < 5 ? 'photo' : 'liveness',
+      faceCaptureMode: memberCaptureMode(null, age),
       allowedCameras: age < 10 ? ['front', 'back'] : ['front'],
       dateOfBirth: payload.dateOfBirth,
       permissions: { independentCheckIn: false, notifyOnCheckIn: true },
@@ -1001,6 +1005,15 @@ export const mockApi = {
       message: 'Liveness verified.',
     });
   },
+  // The mock backend runs the challenge above, as a server whose liveness
+  // service is not on Regula answers: Regula needs the native SDK and a real
+  // Regula service, so no mock ever reports a Regula pass.
+  createRegulaLivenessSession: (_personId?: string): Promise<RegulaLivenessSession> =>
+    failHttp(503, { code: 'REGULA_LIVENESS_DISABLED', message: 'Regula liveness is not enabled.' }),
+  uploadRegulaLivenessFrame: (_sessionId: string, _frameUri: string, _sessionToken: string): Promise<RegulaFrameResponse> =>
+    failHttp(503, { code: 'REGULA_LIVENESS_DISABLED', message: 'Regula liveness is not enabled.' }),
+  completeRegulaLiveness: (_sessionId: string, _transactionId: string, _sessionToken: string): Promise<RegulaCompleteResponse> =>
+    failHttp(503, { code: 'REGULA_LIVENESS_DISABLED', message: 'Regula liveness is not enabled.' }),
 
   // ── Face enrollment / update ─────────────────────────────────────────
   enrollFace: (payload: FaceEnrollRequest): Promise<FaceResponse> => {

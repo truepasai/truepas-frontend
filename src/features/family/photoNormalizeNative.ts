@@ -48,3 +48,9 @@ const deviceIO: PhotoIO = {
 
 /** A captured photo as an upright JPEG of at most 1600 px, checked byte by byte. */
 export const normalizeEnrollmentPhoto = (uri: string): Promise<NormalizedPhoto> => normalizePhoto(uri, deviceIO);
+
+/** Whether the prepared JPEG is still on disk and not empty, just before the face check opens it. */
+export function preparedPhotoReadable(uri: string): boolean {
+  const file = new File(uri);
+  return file.exists && (file.size ?? 0) > 0;
+}

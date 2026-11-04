@@ -1,87 +1,84 @@
 /**
- * Is there one usable face in the photo about to be enrolled? Checked on the
- * prepared JPEG itself — the exact image that is uploaded, not a preview
- * frame — with ML Kit's still-image face detector (the detector the liveness
- * camera uses on preview frames). These are capture-guidance limits on the
- * phone; the face service's own detection and every match threshold are
- * unchanged, and passing here does not guarantee the server finds the face.
+ * Is there exactly one clearly visible face in the photo about to be
+ * enrolled? Checked on the prepared JPEG itself — the exact image that is
+ * uploaded, not a preview frame — with ML Kit's still-image face detector.
+ * For members under 5 this is the whole check: face presence only, no
+ * liveness, no face match, no identity check. The face service still has to
+ * find the face to store it, so passing here does not guarantee it does.
  *
- * ML Kit reports each face's box, head angles and eye-open odds. It reports
- * nothing about light or blur, so those are only named as likely causes when
- * no face is found — never claimed as measured.
+ * What is checked, and why: the file is still readable and has a size;
+ * exactly one face; the face is inside the photo and large enough for the
+ * face service's 112 px crop. ML Kit reports nothing about light or blur and
+ * the app has no other reliable local measure, so neither is checked.
+ *
+ * A detector failure is never a silent "no verdict": it keeps its technical
+ * reason (`detail`, for logs only) and says which part failed — the file, the
+ * detector's creation on this phone, or ML Kit while it ran.
  *
  * Pure, so it runs under `node --test` (__tests__/photoQuality.test.mjs).
  */
 
 export interface DetectedFace {
   bounds: { x: number; y: number; width: number; height: number };
-  yawAngle: number;
-  pitchAngle: number;
-  rollAngle: number;
-  leftEyeOpenProbability?: number;
-  rightEyeOpenProbability?: number;
   /** Size of the image the bounds are measured in (ML Kit's input). */
   frameWidth?: number;
   frameHeight?: number;
 }
 
 export type PhotoIssue =
+  | 'invalid_image'
+  | 'image_unreadable'
+  | 'detector_unavailable'
+  | 'detector_failed'
   | 'no_face'
   | 'several_faces'
   | 'off_frame'
-  | 'too_small'
-  | 'rolled'
-  | 'turned'
-  | 'tilted'
-  | 'eyes_closed'
-  | 'detector_error';
+  | 'too_small';
 
-export type PhotoCheck = { ok: true } | { ok: false; issue: PhotoIssue; guidance: string };
+export type PhotoCheck = { ok: true } | { ok: false; issue: PhotoIssue; guidance: string; detail?: string };
 
-/** Detector option: faces narrower than this share of the photo aren't reported at all. */
+/** Detector option: faces narrower than this share of the photo aren't reported at all (ML Kit's default). */
 export const DETECTOR_MIN_FACE = 0.1;
 /** The face must be at least this share of the photo's width… */
 export const MIN_FACE_WIDTH_SHARE = 0.2;
 /** …and this many pixels across: face-opensource crops 112x112 for the embedding. */
 export const MIN_FACE_PIXELS = 160;
-/** Head angles, in degrees, beyond which the photo is retaken. */
-export const MAX_YAW = 20;
-export const MAX_PITCH = 20;
-export const MAX_ROLL = 20;
-/** Both eyes below this open-probability count as closed. */
-export const EYES_CLOSED_BELOW = 0.2;
 
 export function guidanceFor(issue: PhotoIssue, name = 'Their'): string {
   const who = name === 'Their' ? 'their' : `${name}'s`;
   const Who = name === 'Their' ? 'Their' : `${name}'s`;
   switch (issue) {
+    case 'invalid_image':
+      return "This photo couldn't be read. Please take another photo.";
+    case 'image_unreadable':
+      return "The photo couldn't be opened on this phone. Please take another photo.";
+    case 'detector_unavailable':
+      return "This version of the app can't check photos for a face on this phone. Update the app, then try again.";
+    case 'detector_failed':
+      return 'The face check on this phone stopped with an error. Please take another photo. If it happens again, close and reopen the app.';
     case 'no_face':
-      return `We couldn't find a face in this photo. Use good light, hold the phone steady and get ${who} whole face inside the circle.`;
+      return "We couldn't find a face. Please take another photo.";
     case 'several_faces':
-      return `More than one face is in the photo. Take it again with only ${who} face in view.`;
+      return 'Only one person should be visible in the photo.';
     case 'off_frame':
       return `Part of ${who} face is cut off. Center ${who} face in the circle.`;
     case 'too_small':
       return `${Who} face is too small in the photo. Move closer so it fills most of the circle.`;
-    case 'rolled':
-      return `The photo is at an angle. Hold the phone upright with ${who} head straight.`;
-    case 'turned':
-      return `The face is turned to the side. Take it when they look straight at the camera.`;
-    case 'tilted':
-      return `The head is tilted up or down. Take it with ${who} face level with the camera.`;
-    case 'eyes_closed':
-      return `${Who} eyes look closed. Take it again when they're open.`;
-    case 'detector_error':
-      return "This phone couldn't check the photo, so it can't be used yet. Take it again; if this keeps happening, update the app.";
   }
 }
 
-const fail = (issue: PhotoIssue, name?: string): PhotoCheck => ({ ok: false, issue, guidance: guidanceFor(issue, name) });
+const fail = (issue: PhotoIssue, name?: string, detail?: string): PhotoCheck => ({
+  ok: false,
+  issue,
+  guidance: guidanceFor(issue, name),
+  ...(detail ? { detail } : {}),
+});
 
 /**
  * The verdict for the faces ML Kit found in a photo of `image` size. The
  * order matters: count first (a second face could be the guardian's, and the
- * server would enrol the largest), then framing, size and angles.
+ * server would enrol the largest), then whether the one face is fully in view
+ * and big enough.
  */
 export function checkPhotoFaces(
   faces: readonly DetectedFace[],
@@ -101,29 +98,84 @@ export function checkPhotoFaces(
   const { x, y, width: w, height: h } = face.bounds;
   if (x < 0 || y < 0 || x + w > width || y + h > height) return fail('off_frame', name);
   if (w < MIN_FACE_WIDTH_SHARE * width || w < MIN_FACE_PIXELS) return fail('too_small', name);
-  if (Math.abs(face.rollAngle) > MAX_ROLL) return fail('rolled', name);
-  if (Math.abs(face.yawAngle) > MAX_YAW) return fail('turned', name);
-  if (Math.abs(face.pitchAngle) > MAX_PITCH) return fail('tilted', name);
-  const left = face.leftEyeOpenProbability;
-  const right = face.rightEyeOpenProbability;
-  if (left != null && right != null && left >= 0 && right >= 0 && left < EYES_CLOSED_BELOW && right < EYES_CLOSED_BELOW) {
-    return fail('eyes_closed', name);
-  }
   return { ok: true };
 }
 
-/** Run the detector on the photo; a detector that throws gives no verdict, so the photo can't be used. */
-export function checkPhoto(
-  detect: () => readonly DetectedFace[],
-  image: { width: number; height: number },
-  name?: string,
-): PhotoCheck {
-  let faces: readonly DetectedFace[];
-  try {
-    faces = detect();
-  } catch {
-    return fail('detector_error', name);
+/** The file itself couldn't be opened, rather than ML Kit failing on it:
+ *  Android's IOException family, POSIX errors, and the iOS detector's own
+ *  "Invalid image URI" / "Failed to load image …". */
+const FILE_ERROR = /FileNotFound|IOException|No such file|ENOENT|EACCES|Permission denied|Invalid image URI|Failed to load image/i;
+const MAX_DETAIL = 300;
+
+/** An error as one log-safe line: its name and message, with file paths and URIs removed. */
+export function errorDetail(err: unknown): string {
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return text
+    .replace(/(?:file|content):\/\/\S+|\/(?:data|storage|var|private|Users)\/\S+/g, '<path>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_DETAIL);
+}
+
+export interface PhotoCheckInput {
+  /** Size of the prepared JPEG, as the image library reported it. */
+  image: { width: number; height: number };
+  /** Whether the prepared file is still on disk and not empty. */
+  fileReadable: () => boolean;
+  /** ML Kit's still-image detector run on that file, or the error that kept it from being created. */
+  detector: { detectFaces: () => readonly DetectedFace[] } | { unavailable: unknown };
+}
+
+/** The whole local check, in order: image size, file, detector, faces. */
+export function checkPhoto({ image, fileReadable, detector }: PhotoCheckInput, name?: string): PhotoCheck {
+  const { width, height } = image;
+  if (!(Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0)) {
+    return fail('invalid_image', name, `image size ${width}x${height}`);
   }
-  if (!Array.isArray(faces)) return fail('detector_error', name);
+  let readable: boolean;
+  try {
+    readable = fileReadable();
+  } catch (err) {
+    return fail('image_unreadable', name, errorDetail(err));
+  }
+  if (!readable) return fail('image_unreadable', name, 'prepared photo file is missing or empty');
+  if ('unavailable' in detector) return fail('detector_unavailable', name, errorDetail(detector.unavailable));
+
+  let faces: unknown;
+  try {
+    faces = detector.detectFaces();
+  } catch (err) {
+    const detail = errorDetail(err);
+    return fail(FILE_ERROR.test(detail) ? 'image_unreadable' : 'detector_failed', name, detail);
+  }
+  if (!Array.isArray(faces)) {
+    return fail('detector_failed', name, `detector returned ${faces === null ? 'null' : typeof faces}, not a list of faces`);
+  }
   return checkPhotoFaces(faces, image, name);
+}
+
+/** Save is offered only for the photo under review whose own check passed.
+ *  Retaking goes back to the camera, which drops that photo and its verdict. */
+export function canSavePhoto(stage: { phase: string; check?: PhotoCheck }): boolean {
+  return stage.phase === 'review' && stage.check?.ok === true;
+}
+
+export interface PhotoLogContext {
+  platform: string;
+  image: { width: number; height: number };
+  camera: 'front' | 'back';
+  mode: 'enroll' | 'update';
+}
+
+/** One log line for a check: the result, and for a failure its category and
+ *  technical reason, with what it ran on. Never the image or a file path. */
+export function photoCheckLog(check: PhotoCheck, { platform, image, camera, mode }: PhotoLogContext): string {
+  return [
+    check.ok ? 'face=ok' : `face=failed category=${check.issue}`,
+    ...(!check.ok && check.detail ? [`error="${check.detail.replace(/"/g, "'")}"`] : []),
+    `platform=${platform}`,
+    `image=${image.width}x${image.height}`,
+    `camera=${camera}`,
+    `mode=${mode}`,
+  ].join(' ');
 }

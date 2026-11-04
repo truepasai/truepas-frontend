@@ -678,14 +678,42 @@ export interface LivenessFinalizeResponse {
   success: boolean;
   status: 'passed' | 'failed';
   session_id: string;
-  antispoof_score: number;
+  /** Challenge sessions only (passive anti-spoof); Regula sessions have none. */
+  antispoof_score?: number;
   message: string;
+}
+
+/** POST /liveness/regula/sessions: a session for the Regula Face SDK. The
+ *  server decides whether liveness passed; the phone only runs it with
+ *  `tag` against `service_url` and sends back the transactionId. */
+export interface RegulaLivenessSession {
+  success: boolean;
+  session_id: string;
+  session_token: string;
+  liveness_type: 'regula';
+  tag: string;
+  service_url: string | null;
+  expires_in_seconds: number;
+}
+
+/** POST /liveness/regula/sessions/{id}/frame: the captured face image was kept. */
+export interface RegulaFrameResponse {
+  success: boolean;
+  status: 'captured';
+  session_id: string;
+}
+
+/** POST /liveness/regula/sessions/{id}/complete: Regula confirmed liveness. */
+export interface RegulaCompleteResponse {
+  success: boolean;
+  status: 'passed';
+  session_id: string;
 }
 
 export interface FaceEnrollRequest {
   livenessSessionId?: string;
   sessionToken?: string;
-  /** Under-5 members can't run liveness — send the captured photo instead. */
+  /** Members under 5 don't run liveness — send the captured photo instead. */
   selfieBase64?: string;
   personId?: string;
   /** This attempt's reference, made on the phone before sending: the member's

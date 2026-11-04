@@ -5,7 +5,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { isMemberFaceDone, memberCaptureMode, memberSetupBadge, offersBirthCertificateInstead } from '../memberSetupState.ts';
+import {
+  PHOTO_ENROLLMENT_UNDER_AGE,
+  isMemberFaceDone,
+  memberCaptureMode,
+  memberSetupBadge,
+  offersBirthCertificateInstead,
+} from '../memberSetupState.ts';
 
 // Records as customer-account-service returns them (_family_member).
 const toddler = (overrides = {}) => ({
@@ -47,11 +53,40 @@ describe('the birth-certificate route', () => {
     assert.equal(offersBirthCertificateInstead(toddler({ faceEnrolled: true }), { docDone: false }), false);
   });
 
+  it('is offered to a photo-enrolled 4-year-old too', () => {
+    const four = { age: 4, faceCaptureMode: 'photo', faceEnrolled: false, verification: 'pending_document' };
+    assert.equal(offersBirthCertificateInstead(four, { docDone: false }), true);
+  });
+
   it('is not how members of 5 and over set up (they use liveness)', () => {
-    const seven = { age: 7, faceCaptureMode: 'liveness', faceEnrolled: false, verification: 'pending_document' };
-    assert.equal(offersBirthCertificateInstead(seven, { docDone: false }), false);
-    assert.equal(memberCaptureMode({ age: 7 }), 'liveness');
+    for (const age of [5, 9, 12]) {
+      const member = { age, faceCaptureMode: 'liveness', faceEnrolled: false, verification: 'pending_document' };
+      assert.equal(offersBirthCertificateInstead(member, { docDone: false }), false);
+    }
+  });
+});
+
+describe('the capture mode: one photo under 5, liveness from 5', () => {
+  it('sends a 2-year-old and a 4-year-old to the photo step', () => {
+    assert.equal(PHOTO_ENROLLMENT_UNDER_AGE, 5);
+    assert.equal(memberCaptureMode({ age: 2 }), 'photo');
     assert.equal(memberCaptureMode({ age: 4 }), 'photo');
+    assert.equal(memberCaptureMode(null, 3), 'photo');
+  });
+
+  it('keeps 5 and over on liveness', () => {
+    for (const age of [5, 9, 10, 17, 40]) assert.equal(memberCaptureMode({ age }), 'liveness');
+    assert.equal(memberCaptureMode(null, 5), 'liveness');
+  });
+
+  it("follows the server's faceCaptureMode over the app's own rule", () => {
+    assert.equal(memberCaptureMode({ age: 3, faceCaptureMode: 'liveness' }), 'liveness');
+    assert.equal(memberCaptureMode({ age: 12, faceCaptureMode: 'photo' }), 'photo');
+  });
+
+  it('uses liveness when the age is unknown', () => {
+    assert.equal(memberCaptureMode(null), 'liveness');
+    assert.equal(memberCaptureMode({ age: Number.NaN }), 'liveness');
   });
 });
 

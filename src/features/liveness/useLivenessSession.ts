@@ -2,18 +2,31 @@ import { useCallback, useState } from 'react';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
+import {
+  REGULA_MESSAGES,
+  regulaRunConfig,
+  serverUsesChallenge,
+  type LivenessMethod,
+  type RegulaOutcome,
+  type RegulaRunConfig,
+} from '@/features/liveness/regulaLiveness';
 import type {
     LivenessChallenge,
     LivenessChallengeResponse,
     LivenessEvidenceResponse,
     LivenessFinalizeResponse,
+    RegulaLivenessSession,
 } from '@/types/domain';
 
-type LivenessPhase = 'idle' | 'creating' | 'challenging' | 'finalizing' | 'passed' | 'failed';
+/** `capturing` and `checking` are Regula's: the face image, then Regula liveness. */
+type LivenessPhase = 'idle' | 'creating' | 'challenging' | 'capturing' | 'checking' | 'finalizing' | 'passed' | 'failed';
 
 interface LivenessSessionState {
   phase: LivenessPhase;
+  /** The check this server runs, known once a session exists. */
+  method: LivenessMethod | null;
   challenge: LivenessChallengeResponse | null;
+  regula: RegulaLivenessSession | null;
   currentStepIndex: number;
   currentChallenge: LivenessChallenge | null;
   instruction: string;
@@ -21,27 +34,42 @@ interface LivenessSessionState {
   result: LivenessFinalizeResponse | null;
 }
 
+/** Shown while the face image is taken, before Regula liveness. */
+export const CAPTURE_INSTRUCTION = 'Look straight at the camera and hold still';
+
 /**
- * Orchestrates the active liveness challenge flow:
+ * Orchestrates the liveness flow the server runs.
+ *
+ * Regula (when the server's liveness service is on it):
+ *   create session → capture the face image and upload it → Regula liveness
+ *   on the phone → the server verifies the transaction with Regula
+ * The ML Kit challenge (otherwise):
  *   create challenge → submit evidence for each step → finalize
  *
- * The server provides the challenge sequence; we render it in order.
- * After all steps are accepted, we capture a high-res frame and finalize.
- * The resulting session_id + session_token are used for face enrollment.
+ * The server decides which: a Regula session is asked for first, and only the
+ * server's own "not on Regula" answer leads to the challenge
+ * (regulaLiveness.serverUsesChallenge). Either way the face image is the
+ * app's capture, and the resulting session_id + session_token are used for
+ * face enrollment.
  */
 export function useLivenessSession() {
-  const [state, setState] = useState<LivenessSessionState>({
-    phase: 'idle',
-    challenge: null,
-    currentStepIndex: 0,
-    currentChallenge: null,
-    instruction: '',
-    error: null,
-    result: null,
-  });
+  const [state, setState] = useState<LivenessSessionState>(initialState);
 
   const startSession = useCallback(async (personId?: string) => {
     setState({ ...initialState, phase: 'creating' });
+    try {
+      const regula = await api.createRegulaLivenessSession(personId);
+      setState({ ...initialState, phase: 'capturing', method: 'regula', regula, instruction: CAPTURE_INSTRUCTION });
+      return;
+    } catch (err: any) {
+      const apiErr = toApiError(err);
+      if (!serverUsesChallenge(apiErr)) {
+        console.error('[Liveness] Regula session creation failed:', apiErr.status, apiErr.serverCode);
+        setState({ ...initialState, phase: 'failed', error: apiErr.message });
+        throw err;
+      }
+      console.log('[Liveness] Server runs the challenge, not Regula');
+    }
     try {
       console.log('[Liveness] Creating challenge...', personId ? `for personId=${personId}` : '(self enrollment)');
       const challenge = await api.createLivenessChallenge(personId);
@@ -52,15 +80,14 @@ export function useLivenessSession() {
       }));
       const firstChallenge = challenge.challenge_sequence[0];
       setState({
+        ...initialState,
         phase: 'challenging',
+        method: 'challenge',
         challenge,
         currentStepIndex: 0,
         currentChallenge: firstChallenge,
         instruction: challenge.ui_copy[firstChallenge],
-        error: null,
-        result: null,
       });
-      return challenge;
     } catch (err: any) {
       console.error('[Liveness] Challenge creation failed:', err?.message, JSON.stringify(err?.response?.data));
       // toApiError maps raw axios messages ("Request failed with status code
@@ -158,6 +185,44 @@ export function useLivenessSession() {
     return result;
   }, [state]);
 
+  // Regula, step 1: the captured face image (file:// URI) goes up first; it is
+  // the image a passed session hands on. Then Regula liveness runs (checking).
+  const submitCapture = useCallback(async (frameUri: string): Promise<void> => {
+    if (!state.regula) {
+      throw new Error('No active liveness session');
+    }
+    await api.uploadRegulaLivenessFrame(state.regula.session_id, frameUri, state.regula.session_token);
+    setState((prev) => ({ ...prev, phase: 'checking', instruction: '' }));
+  }, [state]);
+
+  // Regula, step 2: run Regula on the phone (`run`), then hand only the
+  // transactionId to the server, which reads the verdict from Regula. Server
+  // refusals throw, like the challenge's API errors, for the caller's
+  // in-place retry UI; a cancelled or failed run fails here.
+  const checkLiveness = useCallback(async (run: (config: RegulaRunConfig) => Promise<RegulaOutcome>): Promise<void> => {
+    if (!state.regula || state.phase !== 'checking') {
+      throw new Error('No captured face image to check');
+    }
+    const session = state.regula;
+    const config = regulaRunConfig(session);
+    const outcome: RegulaOutcome = config ? await run(config) : { kind: 'failed', reason: 'notConfigured', message: REGULA_MESSAGES.notConfigured };
+    if (outcome.kind !== 'transaction') {
+      console.log('[Liveness] Regula run ended without a transaction:', outcome.kind);
+      setState((prev) => ({
+        ...prev,
+        phase: 'failed',
+        error: outcome.kind === 'cancelled' ? REGULA_MESSAGES.cancelled : outcome.message,
+      }));
+      return;
+    }
+    const verdict = await api.completeRegulaLiveness(session.session_id, outcome.transactionId, session.session_token);
+    setState((prev) => ({
+      ...prev,
+      phase: 'passed',
+      result: { success: true, status: 'passed', session_id: verdict.session_id, message: 'Liveness verified.' },
+    }));
+  }, [state]);
+
   const reset = useCallback(() => {
     setState({ ...initialState });
   }, []);
@@ -172,22 +237,29 @@ export function useLivenessSession() {
     }));
   }, []);
 
+  const session = state.regula ?? state.challenge;
   return {
     ...state,
     startSession,
     submitEvidence,
     finalize,
+    submitCapture,
+    checkLiveness,
     reset,
     failSession,
-    /** Session credentials for face enrollment (available after finalize passes). */
-    sessionId: state.challenge?.session_id ?? null,
-    sessionToken: state.challenge?.session_token ?? null,
+    /** Session credentials for face enrollment (available after the session passes). */
+    sessionId: session?.session_id ?? null,
+    sessionToken: session?.session_token ?? null,
+    /** Seconds the session had left when it was created. */
+    expiresInSeconds: session?.expires_in_seconds ?? null,
   };
 }
 
 const initialState: LivenessSessionState = {
   phase: 'idle',
+  method: null,
   challenge: null,
+  regula: null,
   currentStepIndex: 0,
   currentChallenge: null,
   instruction: '',

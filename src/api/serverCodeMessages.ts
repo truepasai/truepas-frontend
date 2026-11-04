@@ -25,4 +25,15 @@ export const SERVER_CODE_MESSAGES: Record<string, string> = {
   ENROLLMENT_RESULT_UNKNOWN: "We couldn't confirm whether the face was saved.",
   ENROLLMENT_NOT_SAVED: "The face wasn't saved. Please try again.",
   FAMILY_MEMBER_NOT_FOUND: 'This family member is no longer on your account.',
+  // Regula liveness (liveness-service regula_routes): the server's verdict.
+  LIVENESS_FAILED: "We couldn't confirm a live person. Please try again in good light.",
+  REGULA_UNAVAILABLE: "The liveness check isn't available right now. Please try again shortly.",
+  REGULA_TRANSACTION_NOT_FOUND: "We couldn't find this liveness check. Please try again.",
+  REGULA_TRANSACTION_MISMATCH: "This liveness check doesn't belong to this session. Please try again.",
+  REGULA_TRANSACTION_REUSED: 'This liveness check was already used. Please try again.',
+  REGULA_LIVENESS_TYPE_NOT_ALLOWED: "This kind of liveness check isn't accepted. Please update the app.",
+  REGULA_BAD_RESPONSE: "The liveness check couldn't be completed. Please try again.",
+  FACE_IMAGE_REQUIRED: 'The face photo is needed before the liveness check. Please try again.',
+  FACE_IMAGE_ALREADY_CAPTURED: 'Please start the face check again.',
+  LIVENESS_METHOD_RETIRED: 'This face check is no longer accepted. Please update the app.',
 };

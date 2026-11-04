@@ -61,6 +61,9 @@ import type {
     LivenessEvidenceRequest,
     LivenessEvidenceResponse,
     LivenessFinalizeResponse,
+    RegulaCompleteResponse,
+    RegulaFrameResponse,
+    RegulaLivenessSession,
     LoginRequest,
     LogoutRequest,
     Notification,
@@ -746,6 +749,61 @@ export const realApi = {
           'Content-Type': 'multipart/form-data',
         },
       },
+    );
+    return data;
+  },
+  /** Regula liveness, step 1 of 3: a session bound to this person (personId
+   *  as a query param, as for the challenge). 503 REGULA_LIVENESS_DISABLED
+   *  means this server runs the challenge instead (regulaLiveness.ts). */
+  createRegulaLivenessSession: async (personId?: string): Promise<RegulaLivenessSession> => {
+    const { data } = await apiClient.post<RegulaLivenessSession>(
+      '/liveness/regula/sessions',
+      null,
+      { params: personId ? { personId } : undefined, headers: livenessAuth() },
+    );
+    // session_token is a bearer credential and the tag binds the result — never log them.
+    console.log('[API] /liveness/regula/sessions response:', JSON.stringify({
+      session_id: data.session_id, expires_in_seconds: data.expires_in_seconds, has_service_url: Boolean(data.service_url),
+    }));
+    return data;
+  },
+  /** Step 2: the face image the camera captured, uploaded as the challenge's
+   *  finalize frame is (a file:// URI straight into multipart). */
+  uploadRegulaLivenessFrame: async (
+    sessionId: string,
+    frameUri: string,
+    sessionToken: string,
+  ): Promise<RegulaFrameResponse> => {
+    const formData = new FormData();
+    formData.append('frame', {
+      uri: frameUri,
+      type: 'image/jpeg',
+      name: 'frame.jpg',
+    } as any);
+    const { data } = await apiClient.post<RegulaFrameResponse>(
+      `/liveness/regula/sessions/${encodeURIComponent(sessionId)}/frame`,
+      formData,
+      {
+        headers: {
+          ...livenessAuth(),
+          'X-Session-Token': sessionToken,
+          'Content-Type': 'multipart/form-data',
+        },
+      },
+    );
+    return data;
+  },
+  /** Step 3: the Regula SDK's transactionId — nothing else about the result.
+   *  The server reads the verdict from Regula itself. */
+  completeRegulaLiveness: async (
+    sessionId: string,
+    transactionId: string,
+    sessionToken: string,
+  ): Promise<RegulaCompleteResponse> => {
+    const { data } = await apiClient.post<RegulaCompleteResponse>(
+      `/liveness/regula/sessions/${encodeURIComponent(sessionId)}/complete`,
+      { transactionId },
+      { headers: { ...livenessAuth(), 'X-Session-Token': sessionToken } },
     );
     return data;
   },

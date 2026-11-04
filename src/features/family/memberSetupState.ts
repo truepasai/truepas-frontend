@@ -15,11 +15,16 @@
  */
 import type { FamilyMember } from '@/types/domain';
 
-/** Capture screen for a member: one photo under 5, liveness otherwise. */
+/** Members younger than this enroll with one photo, checked on the phone for
+ *  a single face: no liveness and no face match. customer-account-service
+ *  sends the same rule as `faceCaptureMode`, which wins when present. */
+export const PHOTO_ENROLLMENT_UNDER_AGE = 5;
+
+/** Capture screen for a member: one photo under 5, liveness from 5. */
 export function memberCaptureMode(m: Pick<FamilyMember, 'faceCaptureMode' | 'age'> | null | undefined, fallbackAge?: number): 'photo' | 'liveness' {
   if (m?.faceCaptureMode) return m.faceCaptureMode;
   const age = m?.age ?? fallbackAge;
-  return age != null && Number.isFinite(age) && age < 5 ? 'photo' : 'liveness';
+  return age != null && Number.isFinite(age) && age < PHOTO_ENROLLMENT_UNDER_AGE ? 'photo' : 'liveness';
 }
 
 /** The backend never moves a member's `verification` to 'verified' after
@@ -52,7 +57,7 @@ export function memberSetupBadge({ faceDone, docDone, pinNeeded, checking }: Set
 }
 
 /**
- * A member under 5 whose photo isn't enrolled can add a birth certificate
+ * A photo-enrolled member (under 5) whose photo isn't enrolled can add a birth certificate
  * now (it needs no face) and the photo later. Photo IDs still wait for the
  * face: they are checked against it.
  */

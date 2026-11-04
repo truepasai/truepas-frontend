@@ -13,6 +13,11 @@ export const NO_MOCK_FALLBACK: ReadonlySet<string> = new Set([
   'updateFace',
   'finalizeLiveness',
   'getFamilyMemberFaceStatus',
+  // A mock answer must never stand in for the server's Regula liveness
+  // verdict, nor tell the app the server runs the ML Kit challenge.
+  'createRegulaLivenessSession',
+  'uploadRegulaLivenessFrame',
+  'completeRegulaLiveness',
 ]);
 
 export function withMockFallback<A extends unknown[], R>(

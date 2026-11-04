@@ -407,7 +407,7 @@ export function useMemberFaceUpdateGate(isUpdate: boolean): boolean {
  *  expired / was refused (403 REAUTH_REQUIRED), or a failed update used it up. */
 export type ReauthReason = 'expired' | 'retry';
 
-export { isMemberFaceDone, memberCaptureMode, offersBirthCertificateInstead } from './memberSetupState';
+export { PHOTO_ENROLLMENT_UNDER_AGE, isMemberFaceDone, memberCaptureMode, offersBirthCertificateInstead } from './memberSetupState';
 
 export interface MemberSetup {
   /** Face enrolled (or a legacy member already marked 'verified'). */

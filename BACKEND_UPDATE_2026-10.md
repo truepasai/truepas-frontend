@@ -268,7 +268,7 @@ X-Reauth-Token: <reauthToken>
 { "livenessSessionId", "sessionToken", "personId": "<optional family member id>" }
 ```
 
-- Members under 5: send `{ "personId", "selfieBase64" }` instead of the liveness fields. The header is still required.
+- Members under 5 (`faceCaptureMode: "photo"`): send `{ "personId", "selfieBase64" }` instead of the liveness fields. The header is still required.
 - No token, an expired one, or a used one → `403 REAUTH_REQUIRED`. Ask for the PIN again.
 - The token is used up **before** the liveness session. If liveness then fails, ask for the PIN again before retrying.
 

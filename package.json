@@ -13,6 +13,8 @@
     "@react-native-community/netinfo": "12.0.1",
     "@react-navigation/bottom-tabs": "^7.18.16",
     "@reduxjs/toolkit": "^2.12.0",
+    "@regulaforensics/face-core-basic": "8.4.884",
+    "@regulaforensics/face-sdk": "8.4.1444",
     "@regulaforensics/react-native-document-reader-api": "^9.1.369",
     "@regulaforensics/react-native-document-reader-core-mrz": "^9.1.1664",
     "@tanstack/react-query": "^5.101.4",

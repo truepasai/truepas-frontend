@@ -1,16 +1,19 @@
 /** @jsxImportSource react */
 /**
- * Add family — photo enrollment for under-5 members (POST /cb/face/enroll),
- * premium skin. Under-5 members can't run liveness — one clear photo is sent
- * as { selfieBase64, personId } instead of liveness session credentials;
- * either camera may be used (a parent holds the phone for the rear camera).
+ * Add family — photo enrollment for members under 5 (POST /cb/face/enroll),
+ * premium skin. They don't run liveness and nothing is face-matched — one
+ * clear photo is sent as { selfieBase64, personId } instead of liveness
+ * session credentials; either camera may be used (a parent holds the phone
+ * for the rear camera).
  *
  * The photo, before anything is sent:
  *  1. prepared on the phone (photoNormalize): a real JPEG — an iPhone
  *     captures HEIC — upright, at most 1600 px, checked byte by byte;
- *  2. checked for one usable face on that same JPEG with ML Kit's still-image
- *     detector (photoQuality). "Save photo" stays disabled until it passes,
- *     with guidance when it doesn't.
+ *  2. checked on that same JPEG, all on the phone (photoQuality): the file
+ *     is readable, ML Kit's still-image detector finds exactly one face, and
+ *     it is fully in view and large enough. "Save photo" stays disabled until
+ *     it passes, with guidance when it doesn't; a detector failure is logged
+ *     with its reason (never the image).
  *
  * Sending (photoEnrollment): the member's record is read first (they must
  * have no face yet), then the photo goes up once with its own enrollment
@@ -47,10 +50,10 @@ import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Baby, Camera as CameraIcon, FileText, KeyRound, RefreshCw, RotateCcw, SwitchCamera, UserX } from 'lucide-react-native';
 import { uuid } from 'expo-modules-core';
-import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput, type CameraRef } from 'react-native-vision-camera';
-import { useImageFaceDetector } from 'react-native-vision-camera-face-detector';
+import { createImageFaceDetector, type ImageFaceDetector } from 'react-native-vision-camera-face-detector';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
@@ -58,6 +61,7 @@ import { useToast } from '@/components/composite/Toast';
 import { useEnrollFace, useUpdateFace } from '@/features/auth/mutations';
 import {
   type ReauthReason,
+  PHOTO_ENROLLMENT_UNDER_AGE,
   familyKeys,
   useRefreshAfterFaceChange,
   useRememberMemberPhoto,
@@ -74,8 +78,16 @@ import {
   isUnclearFailure,
 } from '@/features/family/photoEnrollment';
 import { PhotoNormalizeError, type NormalizedPhoto } from '@/features/family/photoNormalize';
-import { normalizeEnrollmentPhoto } from '@/features/family/photoNormalizeNative';
-import { DETECTOR_MIN_FACE, checkPhoto, type PhotoCheck } from '@/features/family/photoQuality';
+import { normalizeEnrollmentPhoto, preparedPhotoReadable } from '@/features/family/photoNormalizeNative';
+import {
+  DETECTOR_MIN_FACE,
+  type PhotoCheck,
+  type PhotoCheckInput,
+  canSavePhoto,
+  checkPhoto,
+  errorDetail,
+  photoCheckLog,
+} from '@/features/family/photoQuality';
 import { hasReauthToken } from '@/services/reauth';
 import type { MemberFaceStatus } from '@/types/domain';
 
@@ -85,8 +97,11 @@ import { C } from '../theme';
 import { Button, IconCircle, Row } from '../ui';
 import { GlassPill, NightStage } from './family';
 
-/** Accurate mode with eye classification; faces under 10% of the width aren't reported. */
-const DETECTOR_OPTIONS = { performanceMode: 'accurate', runClassifications: true, minFaceSize: DETECTOR_MIN_FACE } as const;
+/** Accurate mode, face boxes only; faces under 10% of the width aren't reported. */
+const DETECTOR_OPTIONS = { performanceMode: 'accurate', minFaceSize: DETECTOR_MIN_FACE } as const;
+/** The one instruction on this screen: the photo is only checked for a single, visible face. */
+const CLEAR_FACE = "Make sure the child's face is clearly visible.";
+const PLATFORM = `${Platform.OS} ${Platform.Version}`;
 
 type Stage =
   | { phase: 'camera' }
@@ -144,7 +159,16 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
   // can't decode ("no face detected").
   const photoOutput = usePhotoOutput({ containerFormat: 'jpeg' });
   const cameraRef = useRef<CameraRef>(null);
-  const faceDetector = useImageFaceDetector(DETECTOR_OPTIONS);
+  // Created here rather than with useImageFaceDetector, which creates it
+  // during render: a phone that can't create it then shows that on the photo
+  // instead of crashing the screen.
+  const faceDetector = useMemo<{ detector: ImageFaceDetector } | { unavailable: unknown }>(() => {
+    try {
+      return { detector: createImageFaceDetector(DETECTOR_OPTIONS) };
+    } catch (err) {
+      return { unavailable: err };
+    }
+  }, []);
   const enrollFace = useEnrollFace();
   const updateFace = useUpdateFace();
   const removeMember = useRemoveFamilyMember();
@@ -283,30 +307,33 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
       if (!photoFile) throw new PhotoNormalizeError('unreadable', 'The camera returned no photo. Please take it again.');
       const rawUri = photoFile.filePath.startsWith('file://') ? photoFile.filePath : `file://${photoFile.filePath}`;
       const photo = await normalizeEnrollmentPhoto(rawUri);
+      const detector: PhotoCheckInput['detector'] =
+        'detector' in faceDetector
+          ? {
+              detectFaces: () =>
+                faceDetector.detector.detectFaces(photo.uri).map((f) => ({
+                  bounds: f.bounds,
+                  frameWidth: f.frameWidth,
+                  frameHeight: f.frameHeight,
+                })),
+            }
+          : faceDetector;
       const check = checkPhoto(
-        () =>
-          faceDetector.detectFaces(photo.uri).map((f) => ({
-            bounds: f.bounds,
-            yawAngle: f.yawAngle,
-            pitchAngle: f.pitchAngle,
-            rollAngle: f.rollAngle,
-            leftEyeOpenProbability: f.leftEyeOpenProbability,
-            rightEyeOpenProbability: f.rightEyeOpenProbability,
-            frameWidth: f.frameWidth,
-            frameHeight: f.frameHeight,
-          })),
-        photo,
+        { image: photo, fileReadable: () => preparedPhotoReadable(photo.uri), detector },
         name ? first : undefined,
       );
-      // Sizes and the check's verdict only — never the image.
-      console.log(
-        '[FaceCapture] photo',
-        photo.label,
-        check.ok ? 'face ok' : `face ${check.issue}`,
-        `camera=${cameraPosition} mode=${isUpdate ? 'update' : 'enroll'} member`,
-      );
+      // Sizes, the verdict and a failure's reason only — never the image.
+      const line = photoCheckLog(check, { platform: PLATFORM, image: photo, camera: cameraPosition, mode: isUpdate ? 'update' : 'enroll' });
+      if (check.ok) console.log('[FaceCapture] photo', photo.label, line);
+      else console.warn('[FaceCapture] photo', photo.label, line);
       show({ phase: 'review', photo, check });
     } catch (err) {
+      console.warn(
+        '[FaceCapture] photo not prepared',
+        `category=${err instanceof PhotoNormalizeError ? `prepare_${err.problem}` : 'capture_failed'}`,
+        `error="${errorDetail(err).replace(/"/g, "'")}"`,
+        `platform=${PLATFORM} camera=${cameraPosition} mode=${isUpdate ? 'update' : 'enroll'}`,
+      );
       const body = err instanceof PhotoNormalizeError ? err.message : 'The photo could not be taken. Please try again.';
       show({ phase: 'camera' }, { tone: 'error', title: 'Take the photo again', body });
     }
@@ -380,7 +407,7 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
   };
 
   const save = async () => {
-    if (stage.phase !== 'review' || !stage.check.ok || !personId) return;
+    if (stage.phase !== 'review' || !canSavePhoto(stage) || !personId) return;
     const { photo, check } = stage;
     if (isUpdate) {
       // PUT /face with the PIN token — not a second POST /face/enroll.
@@ -529,7 +556,7 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
       label={phase === 'confirming' ? 'Checking it was saved…' : 'Save photo'}
       loading={phase === 'sending' || phase === 'confirming' || phase === 'done'}
       // Disabled until this very photo passed the face check.
-      disabled={!review?.check.ok}
+      disabled={!canSavePhoto(stage)}
       onPress={() => void save()}
     />
   );
@@ -543,10 +570,10 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
         review && !review.check.ok
           ? undefined
           : isUpdate
-            ? 'Take one clear photo. It replaces the current face photo.'
+            ? `${CLEAR_FACE} It replaces the current face photo.`
             : inSetup
-              ? 'One clear photo of their face — no liveness check under 5. Their document comes next.'
-              : 'Members under 5 enroll with one clear photo — no liveness check needed.'
+              ? `${CLEAR_FACE} Their document comes next.`
+              : CLEAR_FACE
       }
       footer={
         <View style={{ gap: 10 }}>
@@ -576,7 +603,7 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
         </FaceRing>
       </View>
       <Row gap={8} style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
-        <GlassPill icon={Baby} label="Under 5 · photo" />
+        <GlassPill icon={Baby} label={`Under ${PHOTO_ENROLLMENT_UNDER_AGE} · photo`} />
         <GlassPill label={cameraPosition === 'front' ? 'Front camera' : 'Back camera'} active />
       </Row>
       {blocked ? <Banner tone="warning" title={blocked.title} body={blocked.body} /> : null}

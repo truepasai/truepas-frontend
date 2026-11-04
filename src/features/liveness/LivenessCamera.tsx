@@ -38,6 +38,7 @@ import {
   PremiumLivenessResultStage as LivenessResultStage,
 } from '@/premium/flows/face';
 import { uprightFrame } from '@/features/liveness/frame';
+import { runRegulaLiveness } from '@/features/liveness/regulaFaceSdk';
 import { useLivenessSession } from '@/features/liveness/useLivenessSession';
 import { clearCooldown, cooldownKey, setCooldown } from '@/services/cooldowns';
 import { flowGuards } from '@/services/flowGuards';
@@ -99,10 +100,18 @@ const STEADY_SAMPLES = 4;
 const STEADY_MAX_WAIT_MS = 4000;
 
 /**
- * Full liveness challenge camera using react-native-vision-camera v5
- * + ML Kit face detector.
+ * Face capture + liveness camera using react-native-vision-camera v5
+ * + ML Kit face detector, with the liveness check the server runs.
  *
- * Flow (per REACT_NATIVE_KYC_INTEGRATION_GUIDE.md §4):
+ * Regula (the server's liveness service on LIVENESS_PROVIDER=regula):
+ *  1. Request camera permissions; create a Regula session
+ *  2. Capture the face image: high-res photo once the face is frontal and
+ *     still (ML Kit is used only for that), uploaded to the session
+ *  3. Regula liveness on its own screen; the server verifies the transaction
+ *  4. Call face enroll/update with session credentials — the image enrolled
+ *     is the one captured in step 2
+ *
+ * ML Kit challenge (otherwise, per REACT_NATIVE_KYC_INTEGRATION_GUIDE.md §4):
  *  1. Request camera permissions
  *  2. Create liveness challenge (server-provided sequence)
  *  3. Frame processor auto-detects blink/turn via ML Kit face landmarks
@@ -173,6 +182,12 @@ export function LivenessCamera({
   const steadyRef = useRef<{ count: number; lastYaw: number | null }>({ count: 0, lastYaw: null });
   const finalizeStartedAt = useRef(0);
   const finalizeTriggered = useRef(false);
+  // Regula's face capture: when one face was first in view (0 = not yet).
+  // The challenge leaves a face in view before its capture; a fresh capture
+  // first waits for one.
+  const faceSeenAt = useRef(0);
+  // Regula liveness is started once per captured image.
+  const regulaStarted = useRef(false);
   const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Transient UX hints (too-fast action, multiple faces) shown under the dial
@@ -389,6 +404,7 @@ export function LivenessCamera({
     const now = Date.now();
     if (now - lastSampleTs.current < 100) return;
     lastSampleTs.current = now;
+    if (faceSeenAt.current === 0) faceSeenAt.current = now;
 
     const leftEye = face.leftEyeOpenProbability ?? 1;
     const rightEye = face.rightEyeOpenProbability ?? 1;
@@ -436,9 +452,10 @@ export function LivenessCamera({
   );
   /* eslint-enable react-hooks/refs */
 
-  // Capture high-res photo for finalize
+  // Capture the high-res face image: the challenge's finalize frame, or
+  // Regula's first step (uploaded before Regula liveness runs).
   const captureAndFinalize = useCallback(async () => {
-    if (capturing || liveness.phase !== 'finalizing') return;
+    if (capturing || (liveness.phase !== 'finalizing' && liveness.phase !== 'capturing')) return;
     setCapturing(true);
     console.log('[Liveness] captureAndFinalize: starting photo capture...');
 
@@ -473,6 +490,14 @@ export function LivenessCamera({
       );
       const fileUri = frame.uri;
       capturedUri.current = fileUri;
+
+      if (liveness.method === 'regula') {
+        // Regula decides only liveness: this captured image is what a passed
+        // session hands on to enrollment. Regula runs next (phase checking).
+        console.log('[Liveness] Uploading the face image before Regula liveness...');
+        await liveness.submitCapture(fileUri);
+        return;
+      }
 
       console.log('[Liveness] Calling finalize API...');
       const result = await liveness.finalize(fileUri);
@@ -605,22 +630,32 @@ export function LivenessCamera({
   }, [mode, liveness.phase, liveness.result, enrollFaceNow]);
 
   // Finalizing starts right after the last step — often a head turn — so the
-  // steadiness count starts over from here.
+  // steadiness count starts over from here. Regula's capture starts fresh too.
   useEffect(() => {
-    if (liveness.phase !== 'finalizing') return;
+    if (liveness.phase !== 'finalizing' && liveness.phase !== 'capturing') return;
     steadyRef.current = { count: 0, lastYaw: null };
     finalizeStartedAt.current = Date.now();
     finalizeTriggered.current = false;
+    faceSeenAt.current = 0;
+    if (liveness.phase === 'capturing') {
+      regulaStarted.current = false;
+      // A retry after Regula ran: its screen had this camera released.
+      queueMicrotask(() => setCameraActive(true));
+    }
   }, [liveness.phase]);
 
   // Auto-finalize once the face is frontal and still (STEADY_SAMPLES): a
   // frame taken while the head swings back from the turn makes a blurred,
-  // angled enrolled face, and documents score low against it.
+  // angled enrolled face, and documents score low against it. Regula's
+  // capture uses the same rule, counted from when a face is first in view.
   useEffect(() => {
-    if (liveness.phase !== 'finalizing' || capturing) return;
+    if ((liveness.phase !== 'finalizing' && liveness.phase !== 'capturing') || capturing) return;
+    const fresh = liveness.phase === 'capturing';
     const timer = setInterval(() => {
       if (finalizeTriggered.current) return;
-      const waited = Date.now() - finalizeStartedAt.current;
+      const since = fresh ? faceSeenAt.current : finalizeStartedAt.current;
+      if (!since) return;
+      const waited = Date.now() - since;
       const steady = steadyRef.current.count >= STEADY_SAMPLES;
       if (!steady && waited < STEADY_MAX_WAIT_MS) return;
       finalizeTriggered.current = true;
@@ -634,25 +669,45 @@ export function LivenessCamera({
     return () => clearInterval(timer);
   }, [liveness.phase, capturing, captureAndFinalize]);
 
+  // Regula liveness, once the face image is up: Regula opens its own camera
+  // screen, so this camera is released first. Only the transactionId goes to
+  // the server, which decides; a cancel or failure shows the retry UI.
+  const { checkLiveness } = liveness;
+  useEffect(() => {
+    if (liveness.phase !== 'checking' || regulaStarted.current) return;
+    regulaStarted.current = true;
+    void (async () => {
+      await Promise.resolve();
+      setCameraActive(false);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      try {
+        await checkLiveness(runRegulaLiveness);
+      } catch (err: any) {
+        console.error('[Liveness] Regula liveness not verified:', err?.response?.status, err?.response?.data?.code);
+        failWithCooldown(err, 'Liveness could not be verified');
+      }
+    })();
+  }, [liveness.phase, checkLiveness, failWithCooldown]);
+
   // ── UI animation hooks (MUST be before any early return) ──────────────
   // Session countdown — expires_in_seconds is a snapshot at challenge
   // creation; tick it down locally so the expiring-session warning is real.
   const [sessionLeft, setSessionLeft] = useState<number | null>(null);
-  const sessionId = liveness.challenge?.session_id;
+  const { sessionId, expiresInSeconds } = liveness;
   useEffect(() => {
-    const total = liveness.challenge?.expires_in_seconds;
+    const total = expiresInSeconds;
     if (total == null) return;
     // Seed on a microtask — synchronous setState inside an effect body is not
     // allowed (react-hooks/set-state-in-effect).
     queueMicrotask(() => setSessionLeft(total));
     const t = setInterval(() => setSessionLeft((s) => (s == null ? s : Math.max(0, s - 1))), 1000);
     return () => clearInterval(t);
-  }, [sessionId, liveness.challenge?.expires_in_seconds]);
+  }, [sessionId, expiresInSeconds]);
 
   // Proactively fail an expired session — otherwise the user keeps doing
   // steps and the next evidence submit dies with a cryptic server error.
   useEffect(() => {
-    if (sessionLeft === 0 && liveness.phase === 'challenging') {
+    if (sessionLeft === 0 && (liveness.phase === 'challenging' || liveness.phase === 'capturing')) {
       // queueMicrotask: a synchronous setState inside the effect body trips
       // react-hooks/set-state-in-effect (same pattern as the seed above).
       queueMicrotask(() => failSession('Your session expired — please try again.'));
@@ -801,7 +856,9 @@ export function LivenessCamera({
     );
   }
 
-  const isFinalizing = liveness.phase === 'finalizing' || (mode === 'verify' && liveness.phase === 'passed');
+  // Regula's `checking`: its own screen is over this one, then the server verifies.
+  const isFinalizing =
+    liveness.phase === 'finalizing' || liveness.phase === 'checking' || (mode === 'verify' && liveness.phase === 'passed');
   const sessionExpiring = sessionLeft != null && sessionLeft > 0 && sessionLeft <= 60;
 
   // Finalize — high-res frame upload + anti-spoof checks. The Camera stays
@@ -848,7 +905,7 @@ export function LivenessCamera({
       stepIndex={liveness.currentStepIndex}
       labels={labels}
       stepProgress={capture}
-      expiresIn={sessionLeft ?? liveness.challenge?.expires_in_seconds}
+      expiresIn={sessionLeft ?? expiresInSeconds ?? undefined}
       sessionExpiring={sessionExpiring}
       multiFace={multiFace}
       hint={hint}
