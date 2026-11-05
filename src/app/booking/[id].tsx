@@ -306,7 +306,7 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
           }}
         >
           <Row between>
-            <BookingStatusBadge status={b.status} dot />
+            <BookingStatusBadge b={b} dot />
             <Txt v="smallStrong" color={C.ink3}>
               {whenLabel(b.checkedInAt || b.checkIn)}
             </Txt>

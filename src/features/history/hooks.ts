@@ -3,6 +3,8 @@ import { useEffect, useState } from 'react';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
+import { isoDay } from '@/premium/flows/home';
+import { withLiveStatus } from './bookingStatus';
 import type { Booking, CreateReservationRequest, ReservationConsentDecision, UpdateReservationRequest } from '@/types/domain';
 
 export const historyKeys = {
@@ -104,8 +106,16 @@ export function useVenueSearch(text: string, enabled: boolean) {
   };
 }
 
+/** A past reservation the server still calls "upcoming" reads as expired
+ *  (withLiveStatus), everywhere the list or detail is shown. */
+const liveList = (list: Booking[]) => {
+  const today = isoDay();
+  return list.map((b) => withLiveStatus(b, today));
+};
+const liveOne = (b: Booking | null) => (b ? withLiveStatus(b, isoDay()) : b);
+
 export function useBookings() {
-  return useQuery({ queryKey: historyKeys.all, queryFn: api.getBookings });
+  return useQuery({ queryKey: historyKeys.all, queryFn: api.getBookings, select: liveList });
 }
 
 /** GET /bookings/{id}. Pass null/'' to skip (e.g. no linked reservation).
@@ -116,6 +126,7 @@ export function useBooking(id: string | null | undefined) {
     queryKey: historyKeys.detail(id ?? ''),
     queryFn: () => api.getBooking(id as string),
     enabled: !!id,
+    select: liveOne,
     retry: (failureCount, error) => {
       const status = toApiError(error).status;
       // An expired session maps to 401 too. Anything else: the app default, 2 retries.

@@ -69,6 +69,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLogoutFlow } from '@/features/auth/useLogoutFlow';
 import { displayDocNumber } from '@/features/documents/format';
 import { useMemberPhoto } from '@/features/family/hooks';
+import { bookingDisplayStatus } from '@/features/history/bookingStatus';
 import { useProfilePicture } from '@/features/profile/hooks';
 import { Guilloche } from '@/premium/blocks';
 import { IMG, type ImgKey } from '@/premium/images';
@@ -177,6 +178,8 @@ const STATUS: Record<string, [BadgeTone, string]> = {
   completed: ['green', 'Completed'],
   active: ['green', 'Active'],
   upcoming: ['sky', 'Upcoming'],
+  check_in_due: ['amber', 'Check-in due'],
+  checked_in: ['green', 'Checked in'],
   pending: ['amber', 'Pending'],
   pending_document: ['amber', 'Document needed'],
   pending_liveness: ['amber', 'Liveness needed'],
@@ -283,7 +286,10 @@ export function bookingStatusTone(status: string): BadgeTone {
   return status === 'expired' ? 'neutral' : statusTone(status);
 }
 
-export function BookingStatusBadge({ status, dot }: { status: string; dot?: boolean }) {
+/** The booking's date-based status (Upcoming / Check-in due / Checked in /
+ *  Expired — features/history/bookingStatus). */
+export function BookingStatusBadge({ b, dot }: { b: Pick<Booking, 'status' | 'checkIn' | 'checkOut'>; dot?: boolean }) {
+  const status = bookingDisplayStatus(b, isoDay());
   return <Badge label={statusLabel(status)} tone={bookingStatusTone(status)} dot={dot} />;
 }
 
@@ -481,7 +487,7 @@ export function BookingHero({ b, onPress }: { b: Booking; onPress?: () => void }
       top={
         <Row between>
           <GlassChip icon={Icon} label={bookingKindLabel(b)} />
-          <BookingStatusBadge status={b.status} dot />
+          <BookingStatusBadge b={b} dot />
         </Row>
       }
     >
@@ -681,7 +687,7 @@ function rowDetail(b: Booking): string {
 /** Compact list row with thumbnail — history lists. */
 export function BookingRow({ b, onPress }: { b: Booking; onPress?: () => void }) {
   return (
-    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${bookingPlace(b)}, ${statusLabel(b.status)}`}>
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${bookingPlace(b)}, ${statusLabel(bookingDisplayStatus(b, isoDay()))}`}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 12 }}>
         <View style={{ width: 62, height: 62, borderRadius: 16, overflow: 'hidden' }}>
           <BookingBackdrop b={b} />
@@ -698,7 +704,7 @@ export function BookingRow({ b, onPress }: { b: Booking; onPress?: () => void })
           </Txt>
         </View>
         <View style={{ alignItems: 'flex-end', gap: 6 }}>
-          <BookingStatusBadge status={b.status} />
+          <BookingStatusBadge b={b} />
           {b.amount != null && <Text style={{ fontFamily: F.mono, fontSize: 12, color: C.ink3 }}>{money(b.amount)}</Text>}
         </View>
       </View>
