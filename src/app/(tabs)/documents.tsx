@@ -4,6 +4,11 @@
  * user's documents as a fanned wallet deck you can swipe through like playing
  * cards, and venue-issued credentials.
  *
+ * Family: with family members, a row of avatars ("Me" first) picks whose
+ * wallet shows. A member's wallet swaps in their strength (useMemberSetup),
+ * their documents (useDocuments(personId) — the member page's cache entry)
+ * and "Add more" for their age; issued credentials stay on "Me".
+ *
  * Data: useSecurityScore (identity strength, §10.2) + useIdentitySummary
  * (local fallback) + useDocuments + supported types (§6.1). Issued
  * credentials (GET /documents/issued) is always [] for now (§13 #14), so that
@@ -12,13 +17,14 @@
 import { useRouter } from 'expo-router';
 import { FileText, MoveHorizontal, Plus, ShieldCheck, Ticket } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, PanResponder, RefreshControl, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { Animated, Easing, PanResponder, Pressable, RefreshControl, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useSecurityScore } from '@/features/account/hooks';
 import { useDocumentTypeOptions, useDocuments } from '@/features/documents/hooks';
-import { ageFromDob } from '@/features/family/hooks';
+import { ageFromDob, useFamily, useMemberPhoto, useMemberSetup, type MemberSetup } from '@/features/family/hooks';
 import { useIdentitySummary } from '@/features/identity/hooks';
+import { useProfilePicture } from '@/features/profile/hooks';
 import { TAB_BAR_SPACE } from '@/premium/blocks';
 import {
   DOC_STYLE,
@@ -29,10 +35,17 @@ import {
 } from '@/premium/flows/home';
 import { Async, Bone, EmptyView } from '@/premium/kit';
 import { C, F, R } from '@/premium/theme';
-import { Button, Card, Chip, IconCircle, Row, SectionHead, Tile, Txt } from '@/premium/ui';
+import { Avatar, Button, Card, Chip, IconCircle, Row, SectionHead, Tile, Txt } from '@/premium/ui';
 import { selectHaptic } from '@/services/haptics';
 import { useAppSelector } from '@/store';
-import type { DocumentType, IdentityDocument, IdentitySummary, SecurityScore, VerificationStatus } from '@/types/domain';
+import type {
+  DocumentType,
+  FamilyMember,
+  IdentityDocument,
+  IdentitySummary,
+  SecurityScore,
+  VerificationStatus,
+} from '@/types/domain';
 
 type Cat = 'all' | 'identity' | 'travel' | 'driving';
 
@@ -46,22 +59,44 @@ export default function DocumentsScreen() {
   const router = useRouter();
   const summary = useIdentitySummary();
   const score = useSecurityScore();
-  const documents = useDocuments();
-  const [cat, setCat] = useState<Cat>('all');
+  const family = useFamily();
+  const members = family.data ?? [];
 
-  // "Add more": the types this user can add (supported types by age).
+  // Whose wallet: null = yours. A member removed meanwhile falls back to yours.
+  const [personId, setPersonId] = useState<string | null>(null);
+  const member = personId ? members.find((m) => m.id === personId) : undefined;
+  const first = member?.name.split(' ')[0] ?? '';
+  const setup = useMemberSetup(member);
+  const documents = useDocuments(member?.id);
+  const [cat, setCat] = useState<Cat>('all');
+  const selectPerson = (id: string | null) => {
+    setPersonId(id);
+    setCat('all');
+  };
+
+  // "Add more": the types this person can add (supported types by age).
   const dob = useAppSelector((state) => state.auth.user?.dateOfBirth);
-  const age = dob ? ageFromDob(dob) : NaN;
+  const age = member ? member.age : dob ? ageFromDob(dob) : NaN;
   const { options: typeOptions } = useDocumentTypeOptions(Number.isFinite(age) && age >= 0 ? age : undefined);
 
-  const refreshing = summary.isRefetching || documents.isRefetching || score.isRefetching;
+  const refreshing = summary.isRefetching || documents.isRefetching || score.isRefetching || family.isRefetching;
   const onRefresh = () => {
     void summary.refetch();
     void score.refetch();
+    void family.refetch();
     void documents.refetch();
   };
 
-  const addDocument = () => router.push('/document/select-type' as never);
+  const openMember = (m: FamilyMember) => router.push({ pathname: '/family/[id]', params: { id: m.id } } as never);
+  const addDocument = () => {
+    if (!member) return router.push('/document/select-type' as never);
+    // Face first, as on the member page: until it's enrolled, setup goes on there.
+    if (!setup.faceDone) return openMember(member);
+    router.push({
+      pathname: '/document/select-type',
+      params: { family: '1', personId: member.id, memberName: member.name, band: member.ageBand, age: String(member.age) },
+    } as never);
+  };
   const missingTypes: DocumentType[] =
     documents.data && typeOptions
       ? typeOptions
@@ -79,10 +114,22 @@ export default function DocumentsScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.sky} />}
           contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: TAB_BAR_SPACE + 20, gap: 26 }}
         >
-          <TabTitle right={<IconCircle icon={Plus} tone="sky" label="Add document" onPress={addDocument} />}>Wallet</TabTitle>
+          <View style={{ gap: 18 }}>
+            <TabTitle right={<IconCircle icon={Plus} tone="sky" label="Add document" onPress={addDocument} />}>Wallet</TabTitle>
+            {members.length > 0 && (
+              <PersonSwitcher
+                members={members}
+                selected={member?.id ?? null}
+                onSelect={selectPerson}
+                onAdd={() => router.push('/family/add' as never)}
+              />
+            )}
+          </View>
 
           {/* ---------- identity strength ---------- */}
-          {score.data ? (
+          {member ? (
+            <MemberStrengthCard first={first} setup={setup} docs={documents.data} onPress={() => openMember(member)} />
+          ) : score.data ? (
             <IdentityStrengthCard server={score.data} docs={documents.data} onPress={() => router.push('/identity' as never)} />
           ) : (
             // Server score loading or failed: the local estimate meanwhile.
@@ -93,32 +140,64 @@ export default function DocumentsScreen() {
 
           {/* ---------- your documents ---------- */}
           <View style={{ gap: 16 }}>
-            <SectionHead title="Your documents" />
+            <SectionHead title={member ? `${first}'s documents` : 'Your documents'} />
             <Async
               q={documents}
               compact
               empty={(docs) => docs.length === 0}
               emptyView={
                 <Card>
-                  <EmptyView
-                    compact
-                    icon={FileText}
-                    title="No documents yet"
-                    body="Add a passport, ID card, or license to verify your identity."
-                    action={<Button label="Add a document" icon={Plus} size="sm" full={false} onPress={addDocument} />}
-                  />
+                  {member ? (
+                    <EmptyView
+                      compact
+                      icon={FileText}
+                      title={`No documents for ${first} yet`}
+                      body={
+                        setup.faceDone
+                          ? `Add ${first}'s passport or ID so they can check in with their face.`
+                          : `Set up ${first}'s face first, then add a document.`
+                      }
+                      action={
+                        <Button
+                          label={setup.faceDone ? `Add ${first}'s first document` : `Continue ${first}'s setup`}
+                          icon={Plus}
+                          size="sm"
+                          full={false}
+                          onPress={addDocument}
+                        />
+                      }
+                    />
+                  ) : (
+                    <EmptyView
+                      compact
+                      icon={FileText}
+                      title="No documents yet"
+                      body="Add a passport, ID card, or license to verify your identity."
+                      action={<Button label="Add a document" icon={Plus} size="sm" full={false} onPress={addDocument} />}
+                    />
+                  )}
                 </Card>
               }
               skeleton={<Bone h={WALLET_CARD_H} r={R.xl} />}
             >
-              {(docs) => <DocumentStack docs={docs} cat={cat} setCat={setCat} onOpen={(d) => router.push(`/document/${d.id}` as never)} />}
+              {(docs) => (
+                // keyed: each person gets a fresh deck order
+                <DocumentStack
+                  key={member?.id ?? 'me'}
+                  docs={docs}
+                  cat={cat}
+                  setCat={setCat}
+                  onOpen={(d) => router.push(`/document/${d.id}` as never)}
+                />
+              )}
             </Async>
           </View>
 
           {/* ---------- add more ---------- */}
-          {missingTypes.length > 0 && (
+          {/* (a member with none has the empty state's button instead) */}
+          {missingTypes.length > 0 && !(member && documents.data?.length === 0) && (
             <View style={{ gap: 16 }}>
-              <SectionHead title="Add more to your wallet" />
+              <SectionHead title={member ? `Add more for ${first}` : 'Add more to your wallet'} />
               <Row gap={12} align="stretch">
                 {missingTypes.map((t) => (
                   <Card
@@ -152,17 +231,19 @@ export default function DocumentsScreen() {
           )}
 
           {/* ---------- issued to you ---------- */}
-          <View style={{ gap: 16 }}>
-            <SectionHead title="Issued to you" />
-            <Card>
-              <EmptyView
-                compact
-                icon={Ticket}
-                title="No issued credentials"
-                body="Credentials issued at venue check-ins appear here."
-              />
-            </Card>
-          </View>
+          {!member && (
+            <View style={{ gap: 16 }}>
+              <SectionHead title="Issued to you" />
+              <Card>
+                <EmptyView
+                  compact
+                  icon={Ticket}
+                  title="No issued credentials"
+                  body="Credentials issued at venue check-ins appear here."
+                />
+              </Card>
+            </View>
+          )}
         </ScrollView>
       </SafeAreaView>
     </View>
@@ -208,8 +289,6 @@ function IdentityStrengthCard({
   const score = Math.max(0, Math.min(100, Math.round(raw)));
   const total = docs?.length ?? 0;
   const verifiedDocs = docs?.filter((d) => d.status === 'verified').length ?? 0;
-  const tone = score >= 90 ? 'green' : score >= 60 ? 'sky' : 'amber';
-  const color = tone === 'green' ? C.green : tone === 'sky' ? C.skyPressed : C.amberInk;
 
   const title =
     total > 0 ? `${verifiedDocs} of ${total} document${total === 1 ? '' : 's'} verified` : 'No documents yet';
@@ -230,6 +309,55 @@ function IdentityStrengthCard({
           ? localSuggestion(s)
           : 'Your identity strength is good';
 
+  return <StrengthView score={score} title={title} sub={sub} onPress={onPress} />;
+}
+
+/**
+ * A member's readiness on the local estimate's scale: face 40, a verified
+ * document 35, that document matched to their face 25 (setup is face first,
+ * then a document checked against it).
+ */
+function MemberStrengthCard({
+  first,
+  setup,
+  docs,
+  onPress,
+}: {
+  first: string;
+  setup: MemberSetup;
+  docs?: IdentityDocument[];
+  onPress: () => void;
+}) {
+  const { faceDone, docDone, pinNeeded, checking } = setup;
+  const score = (faceDone ? 40 : 0) + (docDone ? 35 : 0) + (faceDone && docDone ? 25 : 0);
+  const total = docs?.length ?? 0;
+  const verifiedDocs = docs?.filter((d) => d.status === 'verified').length ?? 0;
+  const open = total - verifiedDocs;
+  // Members verified before setup went face-first can be done with no
+  // document listed: say "Verified", not "No documents yet" beside 100%.
+  const title =
+    total > 0
+      ? `${first} · ${verifiedDocs} of ${total} verified`
+      : docDone
+        ? `${first} · Verified`
+        : `${first} · No documents yet`;
+  const sub = checking
+    ? 'Checking…'
+    : !faceDone
+      ? `Set up ${first}'s face`
+      : !docDone
+        ? `Add ${first}'s document`
+        : pinNeeded
+          ? `Set ${first}'s check-in PIN`
+          : open > 0
+            ? `${open} document${open === 1 ? ' needs' : 's need'} attention`
+            : 'Ready for check-in';
+  return <StrengthView score={score} title={title} sub={sub} onPress={onPress} />;
+}
+
+function StrengthView({ score, title, sub, onPress }: { score: number; title: string; sub: string; onPress: () => void }) {
+  const tone = score >= 90 ? 'green' : score >= 60 ? 'sky' : 'amber';
+  const color = tone === 'green' ? C.green : tone === 'sky' ? C.skyPressed : C.amberInk;
   return (
     <Card pad={16} onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
       <Tile icon={ShieldCheck} tone={tone} size={46} />
@@ -244,6 +372,120 @@ function IdentityStrengthCard({
         <Text style={{ fontFamily: F.medium, fontSize: 10.5, color: C.ink4, marginTop: -2 }}>ready</Text>
       </View>
     </Card>
+  );
+}
+
+/* ───────────────────────── whose wallet ───────────────────────── */
+
+const AVATAR = 56;
+
+function PersonSwitcher({
+  members,
+  selected,
+  onSelect,
+  onAdd,
+}: {
+  members: FamilyMember[];
+  /** Member id, or null for your own wallet. */
+  selected: string | null;
+  onSelect: (id: string | null) => void;
+  onAdd: () => void;
+}) {
+  const user = useAppSelector((state) => state.auth.user);
+  const { url } = useProfilePicture();
+  const mine = useDocuments();
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={{ marginHorizontal: -20 }}
+      contentContainerStyle={{ paddingHorizontal: 20, gap: 12 }}
+    >
+      <PersonChip
+        label="Me"
+        name={user?.fullName}
+        uri={url}
+        count={mine.data?.length}
+        active={selected === null}
+        onPress={() => onSelect(null)}
+      />
+      {members.map((m) => (
+        <MemberChip key={m.id} m={m} active={selected === m.id} onPress={() => onSelect(m.id)} />
+      ))}
+      <Pressable onPress={onAdd} accessibilityRole="button" accessibilityLabel="Add family member">
+        <View style={{ alignItems: 'center', gap: 6, width: AVATAR + 8 }}>
+          <View
+            style={{
+              width: AVATAR,
+              height: AVATAR,
+              borderRadius: AVATAR / 2,
+              borderWidth: 1.5,
+              borderStyle: 'dashed',
+              borderColor: C.ink4,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Plus size={22} color={C.ink3} />
+          </View>
+          <Txt v="small" color={C.ink3}>
+            Add
+          </Txt>
+        </View>
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+function MemberChip({ m, active, onPress }: { m: FamilyMember; active: boolean; onPress: () => void }) {
+  const uri = useMemberPhoto(m.id, m.profileImageUrl);
+  const docs = useDocuments(m.id);
+  return (
+    <PersonChip
+      label={m.name.split(' ')[0]}
+      name={m.name}
+      uri={uri}
+      count={docs.data?.length}
+      active={active}
+      onPress={onPress}
+    />
+  );
+}
+
+function PersonChip({
+  label,
+  name,
+  uri,
+  count,
+  active,
+  onPress,
+}: {
+  label: string;
+  name?: string | null;
+  uri?: string | null;
+  /** Undefined while their documents load. */
+  count?: number;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const docsLine = count == null ? ' ' : count === 0 ? 'No docs' : `${count} doc${count === 1 ? '' : 's'}`;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={count == null ? label : `${label}, ${count} document${count === 1 ? '' : 's'}`}
+    >
+      <View style={{ alignItems: 'center', gap: 6, width: AVATAR + 8 }}>
+        <Avatar uri={uri} name={name ?? label} size={AVATAR} ring={active} />
+        <View style={{ alignItems: 'center' }}>
+          <Text numberOfLines={1} style={{ fontFamily: active ? F.bold : F.medium, fontSize: 13, color: active ? C.ink : C.ink2 }}>
+            {label}
+          </Text>
+          <Text style={{ fontFamily: F.medium, fontSize: 11, color: C.ink4 }}>{docsLine}</Text>
+        </View>
+      </View>
+    </Pressable>
   );
 }
 
