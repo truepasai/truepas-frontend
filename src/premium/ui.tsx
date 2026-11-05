@@ -674,12 +674,15 @@ export function Avatar({
 }) {
   const inner = ring ? size - 6 : size;
   return (
-    <View
-      style={[
-        { width: size, height: size, borderRadius: size / 2, alignItems: "center", justifyContent: "center" },
-        ring && { borderWidth: 2, borderColor: ringColor },
-      ]}
-    >
+    <View style={{ width: size, height: size, borderRadius: size / 2, alignItems: "center", justifyContent: "center" }}>
+      {/* Ring is its own view: toggling borderWidth on the rounded container
+          (e.g. a chip becoming active) renders a square border on Android. */}
+      {ring && (
+        <View
+          pointerEvents="none"
+          style={{ position: "absolute", top: 0, left: 0, width: size, height: size, borderRadius: size / 2, borderWidth: 2, borderColor: ringColor }}
+        />
+      )}
       {uri || src ? (
         <Image
           source={uri ? { uri } : IMG[src as ImgKey]}
