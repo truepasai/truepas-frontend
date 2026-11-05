@@ -1,10 +1,11 @@
 /** @jsxImportSource react */
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { Fingerprint, Info, LockKeyhole, ScanFace, type LucideIcon } from 'lucide-react-native';
 import { useState } from 'react';
 import { View } from 'react-native';
 
 import { toApiError } from '@/api/errors';
+import { isSignupAddressDeferred, useAddress } from '@/features/address/hooks';
 import { useBiometricConsent } from '@/features/auth/mutations';
 import { biometricConsentGiven } from '@/features/auth/slice';
 import { useLogoutFlow } from '@/features/auth/useLogoutFlow';
@@ -33,6 +34,7 @@ const POINTS: { icon: LucideIcon; title: string; body: string }[] = [
 
 /** Biometric consent — POST /user/me/biometric-consent { accepted: true }.
  *  Mandatory gate before liveness enrollment: accept → face-scan or sign out.
+ *  Comes after the signup address step (no address on file → back to it).
  *  No back button: the onboarding stack has no skip path (PRD). */
 export default function ConsentScreen() {
   const router = useRouter();
@@ -41,6 +43,11 @@ export default function ConsentScreen() {
   const biometricConsent = useBiometricConsent();
   const loading = biometricConsent.isPending || signingOut;
   const [error, setError] = useState<string | null>(null);
+  // Signup verifies the home address first (onboarding/address): a session
+  // resumed without one goes back there. A failed read never blocks.
+  const address = useAddress();
+
+  if (address.data === null && !isSignupAddressDeferred()) return <Redirect href="/(onboarding)/address" />;
 
   const accept = async () => {
     if (loading) return;

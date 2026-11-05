@@ -9,7 +9,7 @@ import { Group, go, ListRow, Screen, TopBar, Txt } from '@/premium/ui';
 /** Presenter's index of every screen (long-press the logo on Welcome). */
 export const SCREENS: { group: string; items: [string, string][] }[] = [
   { group: 'Onboarding', items: [['Welcome', '/(auth)/welcome'], ['Sign in', '/(auth)/login'], ['Create account', '/(auth)/register'], ['Verify mobile', '/(auth)/verify-phone'], ['Verify email', '/(auth)/verify-email'], ['About you', '/(auth)/account-details'], ['Forgot password', '/(auth)/forgot-password']] },
-  { group: 'Face setup', items: [['Biometric consent', '/(onboarding)/consent'], ['Face scan', '/(onboarding)/face-scan'], ["You're verified", '/(onboarding)/face-enrolled']] },
+  { group: 'Face setup', items: [['Your address', '/(onboarding)/address'], ['Biometric consent', '/(onboarding)/consent'], ['Face scan', '/(onboarding)/face-scan'], ["You're verified", '/(onboarding)/face-enrolled']] },
   { group: 'Main', items: [['Home', '/(tabs)'], ['Check-ins', '/(tabs)/history'], ['Wallet', '/(tabs)/documents'], ['Hotel stay & digital key', '/booking/t1'], ['Theme park visit', '/booking/t2'], ['My TruePas pass', '/identity'], ['Notifications', '/notification']] },
   { group: 'Face check-in', items: [['Live face check-in', '/face-update/camera'], ['Checked in', '/face-update/success'], ["Couldn't match", '/face-update/error'], ['Confirm with PIN', '/face-update/pin']] },
   { group: 'Documents', items: [['Choose document', '/document/select-type'], ['Scan document', '/document/scan'], ['Verifying', '/document/processing'], ['Verified', '/document/verified'], ['Details mismatch', '/document/mismatch'], ['Document detail', '/document/d1']] },

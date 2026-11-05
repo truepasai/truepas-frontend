@@ -159,3 +159,18 @@ export function takeAddressDraft(): AddressInput | null {
   draft = null;
   return d;
 }
+
+/* ── signup address step ──────────────────────────────────────────────── */
+
+let signupAddressDeferred = false;
+
+/** "Add later" on the signup address step — offered only while the address
+ *  check is down — lets face setup go on for this app session. The next
+ *  launch asks again (the consent screen sends a missing address back). */
+export function deferSignupAddress(): void {
+  signupAddressDeferred = true;
+}
+
+export function isSignupAddressDeferred(): boolean {
+  return signupAddressDeferred;
+}

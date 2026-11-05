@@ -80,9 +80,8 @@ export default function VerifyEmailScreen() {
               refreshToken: response.refreshToken,
             }),
           );
-          // Navigate to consent — the auth layout will redirect to consent
-          // because faceEnrolled is false
-          router.replace('/(onboarding)/consent');
+          // Home address first (verified, as in FacePe), then face consent.
+          router.replace('/(onboarding)/address');
           return;
         }
         // Verified but no session tokens — without sessionStarted the
