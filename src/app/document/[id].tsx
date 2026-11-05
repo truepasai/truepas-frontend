@@ -197,6 +197,9 @@ export default function DocumentDetailScreen() {
             // fall back to the other when only that one was read.
             const issuer = (isLicense ? d.issuingState || d.nationality : d.nationality || d.issuingState) || null;
             const issuerLabel = isLicense && d.issuingState ? 'Issuing state' : d.nationality ? 'Nationality' : 'Issuing state';
+            // First word is the first name, the rest the last name.
+            const [firstName, ...lastParts] = (d.extractedName ?? '').trim().split(/\s+/);
+            const lastName = lastParts.join(' ') || '—';
             return (
               <>
                 {/* Flip card — front: credential card / back: captured scan */}
@@ -263,7 +266,8 @@ export default function DocumentDetailScreen() {
                     number, and next to "Verified" a low-looking percentage
                     reads as a weak check. */}
                 <Group title="Details">
-                  {d.extractedName ? <ListRow title="Holder" value={d.extractedName} chevron={false} /> : null}
+                  {firstName ? <ListRow title="First name" value={firstName} chevron={false} /> : null}
+                  {firstName ? <ListRow title="Last name" value={lastName} chevron={false} /> : null}
                   {displayDocNumber(d.number) ? <ListRow title="Number" value={displayDocNumber(d.number)} chevron={false} /> : null}
                   {d.extractedDob ? (
                     <ListRow
