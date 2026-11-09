@@ -205,7 +205,11 @@ export default function DocumentDetailScreen() {
             const [first, ...rest] = (d.extractedName ?? '').trim().split(/\s+/);
             const split =
               d.type === 'passport'
-                ? splitPassportName(d.extractedName, family.data?.find((m) => m.id === d.personId)?.name ?? profileName)
+                ? splitPassportName(
+                    d.extractedName,
+                    family.data?.find((m) => m.id === d.personId)?.name ?? profileName,
+                    profileName,
+                  )
                 : { firstName: first, lastName: rest.join(' ') };
             const hasName = !!(split.firstName || split.lastName);
             const firstName = split.firstName || '—';

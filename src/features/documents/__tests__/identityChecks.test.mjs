@@ -80,6 +80,26 @@ describe('splitPassportName', () => {
     assert.deepEqual(splitPassportName('LÓPEZ ANNE', 'Anne Lopez'), { firstName: 'ANNE', lastName: 'LÓPEZ' });
   });
 
+  it("uses the account owner's surname on a family member's passport", () => {
+    assert.deepEqual(splitPassportName('DE SOUZA MARIA', 'Maria', 'John De Souza'), { firstName: 'MARIA', lastName: 'DE SOUZA' });
+    assert.deepEqual(splitPassportName('DE SOUZA MARIA ANN', 'Maria', 'John De Souza'), { firstName: 'MARIA ANN', lastName: 'DE SOUZA' });
+    assert.deepEqual(splitPassportName('MALI AARAV', 'Aarav', 'Pradeep Mali'), { firstName: 'AARAV', lastName: 'MALI' });
+    // The holder's own longer passport name, owner = holder.
+    assert.deepEqual(splitPassportName('DE SOUZA JOHN PAUL', 'John De Souza', 'John De Souza'), { firstName: 'JOHN PAUL', lastName: 'DE SOUZA' });
+  });
+
+  it("finds the member's first name when the surname differs", () => {
+    assert.deepEqual(splitPassportName('FERNANDES RITA', 'Rita', 'John De Souza'), { firstName: 'RITA', lastName: 'FERNANDES' });
+    assert.deepEqual(splitPassportName('VAN DER BERG ANNA', 'Anna', 'John De Souza'), { firstName: 'ANNA', lastName: 'VAN DER BERG' });
+    assert.deepEqual(splitPassportName('FERNANDES RITA MARIE', 'Rita Fernandes', 'John De Souza'), { firstName: 'RITA MARIE', lastName: 'FERNANDES' });
+  });
+
+  it('falls back to the first word with nothing to go on', () => {
+    assert.deepEqual(splitPassportName('VAN DER BERG ANNA', '', 'John De Souza'), { firstName: 'DER BERG ANNA', lastName: 'VAN' });
+    // An owner name typed surname-first does not match, so it is skipped.
+    assert.deepEqual(splitPassportName('DE SOUZA MARIA', '', 'Souza John'), { firstName: 'SOUZA MARIA', lastName: 'DE' });
+  });
+
   it('handles a single word and an empty name', () => {
     assert.deepEqual(splitPassportName('MADONNA', 'Madonna'), { firstName: '', lastName: 'MADONNA' });
     assert.deepEqual(splitPassportName('', 'John'), { firstName: '', lastName: '' });

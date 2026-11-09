@@ -53,24 +53,31 @@ export function namesMatch(profileName: string | null | undefined, documentName:
 
 /**
  * First and last name of a passport holder. The document sends one string,
- * surname first (MRZ order). When it holds exactly the words of the
- * holder's profile name, the profile's order decides the split ("DE SOUZA
- * JOHN" + "John De Souza" → JOHN / DE SOUZA); otherwise the first word is the
- * surname and the rest the given names. Words keep the document's spelling.
+ * surname first (MRZ order). Words keep the document's spelling. In order:
+ * 1. It holds exactly the words of the holder's name (profile, or the name a
+ *    family member was added with): that name's order decides the split
+ *    ("DE SOUZA JOHN" + "John De Souza" → JOHN / DE SOUZA).
+ * 2. It starts with the account owner's surname (their name after the first
+ *    word), as a family member's passport often does: that is the surname.
+ * 3. The holder's first name is found past the front: the words before it
+ *    are the surname ("VAN DER BERG ANNA" + "Anna" → ANNA / VAN DER BERG).
+ * 4. Otherwise the first word is the surname and the rest the given names.
  */
 export function splitPassportName(
   documentName: string | null | undefined,
-  profileName: string | null | undefined,
+  holderName: string | null | undefined,
+  ownerName?: string | null,
 ): { firstName: string; lastName: string } {
   const tokens = (documentName ?? '').split(/[\s<]+/).filter(Boolean);
   if (tokens.length === 0) return { firstName: '', lastName: '' };
+  const at = (i: number) => ({ firstName: tokens.slice(i).join(' '), lastName: tokens.slice(0, i).join(' ') });
 
   const docKeys = tokens.map((t) => nameWords(t).join(''));
-  const profile = nameWords(profileName ?? '');
-  if (profile.length === tokens.length && profile.length > 1) {
+  const holder = nameWords(holderName ?? '');
+  if (holder.length === tokens.length && holder.length > 1) {
     const left = tokens.map((t, i) => ({ t, k: docKeys[i] }));
     const ordered: string[] = [];
-    for (const w of profile) {
+    for (const w of holder) {
       const i = left.findIndex((l) => l.k === w);
       if (i < 0) break;
       ordered.push(left[i].t);
@@ -80,7 +87,16 @@ export function splitPassportName(
       return { firstName: ordered[0], lastName: ordered.slice(1).join(' ') };
     }
   }
-  return { firstName: tokens.slice(1).join(' '), lastName: tokens[0] };
+
+  const surname = nameWords(ownerName ?? '').slice(1);
+  if (surname.length > 0 && surname.length < tokens.length && surname.every((w, i) => docKeys[i] === w)) {
+    return at(surname.length);
+  }
+
+  const given = docKeys.indexOf(holder[0] ?? '', 1);
+  if (given > 0) return at(given);
+
+  return at(1);
 }
 
 /** True when the expiry date (ISO yyyy-mm-dd, as the verify response sends
