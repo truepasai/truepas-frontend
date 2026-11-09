@@ -14,6 +14,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { toApiError } from '@/api/errors';
 import { useDocument, useDocumentImages, useRemoveDocument } from '@/features/documents/hooks';
 import { displayDocNumber } from '@/features/documents/format';
+import { splitPassportName } from '@/features/documents/identityChecks';
 import { ageBandFromAge, useFamily } from '@/features/family/hooks';
 import { useToast } from '@/hooks/useToast';
 import {
@@ -26,6 +27,7 @@ import { Async, Bone, ConfirmSheet, EmptyView, SkeletonList } from '@/premium/ki
 import { C, R } from '@/premium/theme';
 import { Button, Card, Group, ListRow, Row, Screen, TopBar, Txt } from '@/premium/ui';
 import { getDocumentImageUri } from '@/services/documentImageStore';
+import { useAppSelector } from '@/store';
 import type { IdentityDocument } from '@/types/domain';
 
 const CARD_H = 212;
@@ -56,6 +58,7 @@ export default function DocumentDetailScreen() {
   // Signed, expiring URLs — refetched with the screen, never cached to disk.
   const imagesQuery = useDocumentImages(id);
   const family = useFamily();
+  const profileName = useAppSelector((state) => state.auth.user?.fullName ?? '');
   const removeDocument = useRemoveDocument();
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [scanImageUri, setScanImageUri] = useState<string | null>(null);
@@ -197,9 +200,16 @@ export default function DocumentDetailScreen() {
             // fall back to the other when only that one was read.
             const issuer = (isLicense ? d.issuingState || d.nationality : d.nationality || d.issuingState) || null;
             const issuerLabel = isLicense && d.issuingState ? 'Issuing state' : d.nationality ? 'Nationality' : 'Issuing state';
-            // First word is the first name, the rest the last name.
-            const [firstName, ...lastParts] = (d.extractedName ?? '').trim().split(/\s+/);
-            const lastName = lastParts.join(' ') || '—';
+            // A passport puts the surname first (see splitPassportName); on
+            // other documents the first word is the first name.
+            const [first, ...rest] = (d.extractedName ?? '').trim().split(/\s+/);
+            const split =
+              d.type === 'passport'
+                ? splitPassportName(d.extractedName, family.data?.find((m) => m.id === d.personId)?.name ?? profileName)
+                : { firstName: first, lastName: rest.join(' ') };
+            const hasName = !!(split.firstName || split.lastName);
+            const firstName = split.firstName || '—';
+            const lastName = split.lastName || '—';
             return (
               <>
                 {/* Flip card — front: credential card / back: captured scan */}
@@ -266,8 +276,8 @@ export default function DocumentDetailScreen() {
                     number, and next to "Verified" a low-looking percentage
                     reads as a weak check. */}
                 <Group title="Details">
-                  {firstName ? <ListRow title="First name" value={firstName} chevron={false} /> : null}
-                  {firstName ? <ListRow title="Last name" value={lastName} chevron={false} /> : null}
+                  {hasName ? <ListRow title="First name" value={firstName} chevron={false} /> : null}
+                  {hasName ? <ListRow title="Last name" value={lastName} chevron={false} /> : null}
                   {displayDocNumber(d.number) ? <ListRow title="Number" value={displayDocNumber(d.number)} chevron={false} /> : null}
                   {d.extractedDob ? (
                     <ListRow

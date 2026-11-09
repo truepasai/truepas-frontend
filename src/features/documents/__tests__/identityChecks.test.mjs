@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { isExpired, namesMatch } from '../identityChecks.ts';
+import { isExpired, namesMatch, splitPassportName } from '../identityChecks.ts';
 
 describe('namesMatch', () => {
   it('ignores case, spacing, punctuation and accents', () => {
@@ -64,5 +64,24 @@ describe('isExpired', () => {
     assert.equal(isExpired(null, TODAY), false);
     assert.equal(isExpired('', TODAY), false);
     assert.equal(isExpired('12/01/2020', TODAY), false);
+  });
+});
+
+describe('splitPassportName', () => {
+  it('takes the surname from the front without a matching profile', () => {
+    assert.deepEqual(splitPassportName('MALI PRADEEP', ''), { firstName: 'PRADEEP', lastName: 'MALI' });
+    assert.deepEqual(splitPassportName('MALI PRADEEP KUMAR', 'Someone Else'), { firstName: 'PRADEEP KUMAR', lastName: 'MALI' });
+    assert.deepEqual(splitPassportName('DOE<<JOHN', null), { firstName: 'JOHN', lastName: 'DOE' });
+  });
+
+  it("follows the profile's order when the words are the same", () => {
+    assert.deepEqual(splitPassportName('DE SOUZA JOHN', 'John De Souza'), { firstName: 'JOHN', lastName: 'DE SOUZA' });
+    assert.deepEqual(splitPassportName('MALI PRADEEP', 'pradeep mali'), { firstName: 'PRADEEP', lastName: 'MALI' });
+    assert.deepEqual(splitPassportName('LÓPEZ ANNE', 'Anne Lopez'), { firstName: 'ANNE', lastName: 'LÓPEZ' });
+  });
+
+  it('handles a single word and an empty name', () => {
+    assert.deepEqual(splitPassportName('MADONNA', 'Madonna'), { firstName: '', lastName: 'MADONNA' });
+    assert.deepEqual(splitPassportName('', 'John'), { firstName: '', lastName: '' });
   });
 });

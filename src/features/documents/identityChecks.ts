@@ -51,6 +51,38 @@ export function namesMatch(profileName: string | null | undefined, documentName:
   return fullWord;
 }
 
+/**
+ * First and last name of a passport holder. The document sends one string,
+ * surname first (MRZ order). When it holds exactly the words of the
+ * holder's profile name, the profile's order decides the split ("DE SOUZA
+ * JOHN" + "John De Souza" → JOHN / DE SOUZA); otherwise the first word is the
+ * surname and the rest the given names. Words keep the document's spelling.
+ */
+export function splitPassportName(
+  documentName: string | null | undefined,
+  profileName: string | null | undefined,
+): { firstName: string; lastName: string } {
+  const tokens = (documentName ?? '').split(/[\s<]+/).filter(Boolean);
+  if (tokens.length === 0) return { firstName: '', lastName: '' };
+
+  const docKeys = tokens.map((t) => nameWords(t).join(''));
+  const profile = nameWords(profileName ?? '');
+  if (profile.length === tokens.length && profile.length > 1) {
+    const left = tokens.map((t, i) => ({ t, k: docKeys[i] }));
+    const ordered: string[] = [];
+    for (const w of profile) {
+      const i = left.findIndex((l) => l.k === w);
+      if (i < 0) break;
+      ordered.push(left[i].t);
+      left.splice(i, 1);
+    }
+    if (ordered.length === tokens.length) {
+      return { firstName: ordered[0], lastName: ordered.slice(1).join(' ') };
+    }
+  }
+  return { firstName: tokens.slice(1).join(' '), lastName: tokens[0] };
+}
+
 /** True when the expiry date (ISO yyyy-mm-dd, as the verify response sends
  *  it) is before today (local). Missing or unreadable dates — the server
  *  doesn't always return one — are not treated as expired. */
