@@ -334,7 +334,9 @@ export function Heading({
           {over}
         </Txt>
       )}
-      <Text style={[T[size] as TextStyle, DESCENDERS, light && { color: C.white }, center && { textAlign: "center" }]}>
+      {/* Full width: shrink-wrapped, Android measures the bigger serif accent
+          narrower than it draws, wraps it onto a line that gets clipped. */}
+      <Text style={[T[size] as TextStyle, DESCENDERS, { alignSelf: "stretch" }, light && { color: C.white }, center && { textAlign: "center" }]}>
         {title}
         {accent != null && (
           <>

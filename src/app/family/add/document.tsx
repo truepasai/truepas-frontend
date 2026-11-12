@@ -14,17 +14,18 @@
  * face. The member stays "Face pending" — not verified, check-in frozen —
  * until the photo is enrolled.
  */
+import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Check, ScanFace, ScanLine } from 'lucide-react-native';
 import { useState } from 'react';
-import { Pressable, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { allowedDocumentTypes, useSupportedDocumentTypes } from '@/features/documents/hooks';
 import { ageBandFromAge, isTwin, memberCaptureMode, useFamilyMember } from '@/features/family/hooks';
-import { DOC_ICON } from '@/premium/flows/family';
+import { DOC_META, docMeta } from '@/premium/flows/documents';
 import { Banner, SkeletonList } from '@/premium/kit';
-import { C } from '@/premium/theme';
-import { Badge, Button, Card, Heading, Screen, Steps, Tile, TopBar, Txt } from '@/premium/ui';
+import { C, F, R, SH } from '@/premium/theme';
+import { Badge, Button, Heading, Screen, Steps, TopBar, Txt } from '@/premium/ui';
 import type { DocumentType, FamilyAgeBand } from '@/types/domain';
 
 type DocOption = { id: DocumentType; label: string };
@@ -143,29 +144,41 @@ export default function FamilyDocumentScreen() {
         {options == null ? (
           <SkeletonList rows={4} thumb={40} />
         ) : (
-          <Card pad={0} style={{ paddingHorizontal: 16 }}>
-            {options.map((o, i) => {
+          <View style={{ gap: 12 }}>
+            {options.map((o) => {
               const isSelected = o.id === selected?.id;
+              // Same cards as the Add document picker; known types keep the app's label.
+              const d = docMeta(o.id);
+              const title = DOC_META[o.id] ? d.label : o.label;
               return (
                 <Pressable
                   key={o.id}
                   accessibilityRole="radio"
-                  accessibilityLabel={o.label}
+                  accessibilityLabel={title}
                   accessibilityState={{ selected: isSelected, checked: isSelected }}
-                  onPress={() => setSelectedId(o.id)}>
+                  onPress={() => setSelectedId(o.id)}
+                  style={[{ borderRadius: R.lg }, SH.sm]}>
                   <View
                     style={{
                       flexDirection: 'row',
                       alignItems: 'center',
-                      gap: 14,
-                      paddingVertical: 14,
-                      borderTopWidth: i ? 1 : 0,
-                      borderTopColor: C.lineSoft,
+                      gap: 16,
+                      backgroundColor: C.surface,
+                      borderRadius: R.lg,
+                      padding: 14,
+                      borderWidth: 1.5,
+                      borderColor: isSelected ? C.sky : C.lineSoft,
                     }}>
-                    <Tile icon={DOC_ICON[o.id]} tone={isSelected ? 'sky' : 'neutral'} size={40} />
-                    <Txt v="bodyStrong" color={isSelected ? C.ink : C.ink2} style={{ flex: 1 }}>
-                      {o.label}
-                    </Txt>
+                    <View style={{ width: 62, height: 44, borderRadius: 9, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+                      <LinearGradient colors={d.colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={StyleSheet.absoluteFill} />
+                      <View>
+                        <d.icon size={20} color={C.white} />
+                      </View>
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={{ fontFamily: F.bold, fontSize: 15.5, color: C.ink }}>{title}</Text>
+                      {!!d.sub && <Txt v="small">{d.sub}</Txt>}
+                    </View>
                     <View
                       style={{
                         width: 24,
@@ -183,7 +196,7 @@ export default function FamilyDocumentScreen() {
                 </Pressable>
               );
             })}
-          </Card>
+          </View>
         )}
       </View>
     </Screen>
