@@ -201,27 +201,22 @@ export default function DocumentDetailScreen() {
             // fall back to the other when only that one was read.
             const issuer = (isLicense ? d.issuingState || d.nationality : d.nationality || d.issuingState) || null;
             const issuerLabel = isLicense && d.issuingState ? 'Issuing state' : d.nationality ? 'Nationality' : 'Issuing state';
-<<<<<<< Updated upstream
-            // A passport puts the surname first (see splitPassportName); on
-            // other documents the first word is the first name.
-            const [first, ...rest] = (d.extractedName ?? '').trim().split(/\s+/);
-            const split =
+            // Regula's own given-name and surname fields, plus the name as
+            // printed when they don't account for it (documentName.ts). Never
+            // split by position: many documents print the surname first. A
+            // passport verified before those fields were kept has only the
+            // printed name, surname first: splitPassportName's split of it, by
+            // the names its holder is known by, stands in for them then.
+            const nameRows = documentNameRows(
+              d,
               d.type === 'passport'
                 ? splitPassportName(
                     d.extractedName,
                     family.data?.find((m) => m.id === d.personId)?.name ?? profileName,
                     profileName,
                   )
-                : { firstName: first, lastName: rest.join(' ') };
-            const hasName = !!(split.firstName || split.lastName);
-            const firstName = split.firstName || '—';
-            const lastName = split.lastName || '—';
-=======
-            // Regula's own given-name and surname fields, plus the name as
-            // printed when they don't account for it (documentName.ts). Never
-            // split by position: many documents print the surname first.
-            const nameRows = documentNameRows(d);
->>>>>>> Stashed changes
+                : undefined,
+            );
             return (
               <>
                 {/* Flip card — front: credential card / back: captured scan */}
@@ -290,26 +285,6 @@ export default function DocumentDetailScreen() {
                 {/* One flat, keyed list: Group puts its hairlines between
                     top-level children only. */}
                 <Group title="Details">
-<<<<<<< Updated upstream
-                  {hasName ? <ListRow title="First name" value={firstName} chevron={false} /> : null}
-                  {hasName ? <ListRow title="Last name" value={lastName} chevron={false} /> : null}
-                  {displayDocNumber(d.number) ? <ListRow title="Number" value={displayDocNumber(d.number)} chevron={false} /> : null}
-                  {d.extractedDob ? (
-                    <ListRow
-                      title="Date of birth"
-                      value={showDob ? prettyDate(d.extractedDob) : `•• ••• ${d.extractedDob.slice(0, 4)}`}
-                      onPress={() => setShowDob((v) => !v)}
-                      trailing={showDob ? <EyeOff size={18} color={C.ink4} /> : <Eye size={18} color={C.ink4} />}
-                    />
-                  ) : null}
-                  {issuer ? <ListRow title={issuerLabel} value={issuer} chevron={false} /> : null}
-                  {expires ? <ListRow title="Expires" value={prettyDate(expires)} chevron={false} /> : null}
-                  {d.verifiedAt ? (
-                    <ListRow title="Verified on" value={localDay(d.verifiedAt)} chevron={false} />
-                  ) : (
-                    <ListRow title="Added" value={prettyDate(d.addedAt)} chevron={false} />
-                  )}
-=======
                   {[
                     ...nameRows.map((row) => <ListRow key={row.key} title={row.title} value={row.value} chevron={false} />),
                     displayDocNumber(d.number) ? (
@@ -332,7 +307,6 @@ export default function DocumentDetailScreen() {
                       <ListRow key="added" title="Added" value={prettyDate(d.addedAt)} chevron={false} />
                     ),
                   ]}
->>>>>>> Stashed changes
                 </Group>
 
                 <Card pad={0} style={{ paddingHorizontal: 16 }}>

@@ -1,14 +1,16 @@
 /** The holder's name on the document detail screen (documentName.ts): Regula's
  *  own given-name and surname fields under the right labels, never a split of
- *  the printed name by position, never ordered after the profile name.
- *  Synthetic names only. */
+ *  the printed name by position, never ordered after the profile name. Only a
+ *  passport Regula read neither part of falls back to splitPassportName's
+ *  split of the printed name. Synthetic names only. */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { documentNameRows } from '../documentName.ts';
+import { splitPassportName } from '../identityChecks.ts';
 
-const rows = (doc) => documentNameRows(doc).map(({ title, value }) => [title, value]);
+const rows = (doc, split) => documentNameRows(doc, split).map(({ title, value }) => [title, value]);
 
 describe('documentNameRows: passports (field 25 printed surname first)', () => {
   it('labels the surname and given names from their own fields', () => {
@@ -100,21 +102,62 @@ describe('documentNameRows: missing or ambiguous parts', () => {
   });
 });
 
+describe("documentNameRows: a passport's printed name split by the caller", () => {
+  const printedOnly = (extractedName) => ({ extractedName, extractedGivenNames: null, extractedSurname: null });
+
+  it('uses the split when Regula read neither part', () => {
+    assert.deepEqual(rows(printedOnly('DE SOUZA MARIA'), splitPassportName('DE SOUZA MARIA', 'Maria', 'John De Souza')), [
+      ['Given names', 'MARIA'],
+      ['Surname', 'DE SOUZA'],
+    ]);
+    assert.deepEqual(rows(printedOnly('MALI PRADEEP KUMAR'), splitPassportName('MALI PRADEEP KUMAR', '')), [
+      ['Given names', 'PRADEEP KUMAR'],
+      ['Surname', 'MALI'],
+    ]);
+  });
+
+  it("ignores the split once Regula read either part", () => {
+    const wrong = { firstName: 'SOUZA JOHN', lastName: 'DE' };
+    assert.deepEqual(rows({ extractedName: 'DE SOUZA JOHN', extractedGivenNames: 'JOHN', extractedSurname: 'DE SOUZA' }, wrong), [
+      ['Given names', 'JOHN'],
+      ['Surname', 'DE SOUZA'],
+    ]);
+    assert.deepEqual(rows({ extractedName: 'DOE JOHN', extractedGivenNames: null, extractedSurname: 'DOE' }, { firstName: 'JOHN', lastName: 'DOE' }), [
+      ['Surname', 'DOE'],
+      ['Name on document', 'DOE JOHN'],
+    ]);
+  });
+
+  it('a one-word passport name is the surname only', () => {
+    assert.deepEqual(rows(printedOnly('MADONNA'), splitPassportName('MADONNA', 'Madonna')), [['Surname', 'MADONNA']]);
+  });
+
+  it('still shows the printed name when the split leaves words out', () => {
+    assert.deepEqual(rows(printedOnly('DOE JOHN'), { firstName: 'JOHN', lastName: '' }), [
+      ['Given names', 'JOHN'],
+      ['Name on document', 'DOE JOHN'],
+    ]);
+  });
+});
+
 const app = (path) => readFileSync(new URL(`../../../app/${path}`, import.meta.url), 'utf8');
 
 describe('the document detail screen', () => {
   const screen = app('document/[id].tsx');
 
   it('shows the rows from documentNameRows, in the flat list Group separates', () => {
-    assert.match(screen, /documentNameRows\(d\)/);
+    assert.match(screen, /documentNameRows\(\s*d,/);
     // Group puts hairlines between top-level children only: the name rows are
     // spread into its one flat array, not nested as an array of their own.
     assert.match(screen, /\[\s*\.\.\.nameRows\.map\(/);
   });
 
-  it('never orders a document name after the profile or by word position', () => {
-    assert.doesNotMatch(screen, /splitPassportName/);
-    assert.doesNotMatch(screen, /auth\.user/);
+  it("splits a printed name only as documentNameRows' passport fallback, never by word position", () => {
+    // The profile and family names order a passport's printed name only through
+    // splitPassportName, handed to documentNameRows (used when Regula read
+    // neither part), and only for a passport.
+    assert.match(screen, /documentNameRows\(\s*d,\s*d\.type === 'passport'\s*\?\s*splitPassportName\(/);
+    assert.equal(screen.match(/splitPassportName\(/g)?.length, 1);
     assert.doesNotMatch(screen, /extractedName[^\n]*\.split\(/);
     assert.doesNotMatch(screen, /"First name"|"Last name"/);
   });

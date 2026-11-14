@@ -82,7 +82,7 @@ describe('document/[id].tsx shows the document name without inventing parts', ()
   // The rows come from documentName.ts (its own tests: documentName.test.mjs).
   const rules = readFileSync(new URL('../documentName.ts', import.meta.url), 'utf8');
   it('uses Regula given-name and surname fields, never a split by position', () => {
-    assert.match(text, /documentNameRows\(d\)/);
+    assert.match(text, /documentNameRows\(\s*d,/);
     assert.match(rules, /doc\.extractedGivenNames/);
     assert.match(rules, /doc\.extractedSurname/);
     assert.doesNotMatch(text, /split\(\/\\s\+\/\)/);

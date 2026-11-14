@@ -7,10 +7,16 @@
  * extractedName, the combined value as the document prints it (surname first on
  * passports). The parts are Regula's own fields. They are never cut out of the
  * combined value by word position, and never ordered after the profile name.
+ * The one exception: when Regula read neither part (a passport verified before
+ * identity-proofing-service kept them), a split of the printed name made by the
+ * caller stands in. document/[id].tsx passes splitPassportName's.
  */
 import type { IdentityDocument } from '@/types/domain';
 
 export type NameRow = { key: 'givenNames' | 'surname' | 'printed'; title: string; value: string };
+
+/** The printed name cut into given names and surname by the caller. */
+export type PrintedNameSplit = { firstName: string; lastName: string };
 
 type NameFields = Pick<IdentityDocument, 'extractedName' | 'extractedGivenNames' | 'extractedSurname'>;
 
@@ -27,10 +33,15 @@ const words = (value: string) =>
     .sort()
     .join(' ');
 
-export function documentNameRows(doc: NameFields): NameRow[] {
-  const given = tidy(doc.extractedGivenNames);
-  const surname = tidy(doc.extractedSurname);
+export function documentNameRows(doc: NameFields, printedSplit?: PrintedNameSplit): NameRow[] {
+  let given = tidy(doc.extractedGivenNames);
+  let surname = tidy(doc.extractedSurname);
   const printed = tidy(doc.extractedName);
+  // Regula read neither part: the caller's split of the printed name, if any.
+  if (!given && !surname && printedSplit) {
+    given = tidy(printedSplit.firstName);
+    surname = tidy(printedSplit.lastName);
+  }
   const rows: NameRow[] = [];
   if (given) rows.push({ key: 'givenNames', title: 'Given names', value: given });
   if (surname) rows.push({ key: 'surname', title: 'Surname', value: surname });
