@@ -29,8 +29,8 @@ import { api } from '@/api';
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
 import { documentKeys, refreshAfterVerify, useAddDocument } from '@/features/documents/hooks';
-import { isExpired, namesMatch } from '@/features/documents/identityChecks';
 import { errorFields, startDocLog, type DocLog } from '@/features/documents/verifyLog';
+import { alreadyVerified, mayDiscard, rejectKind, type RejectKind } from '@/features/documents/verifyOutcome';
 import {
   DEFAULT_REJECTION_MESSAGE,
   isApproved,
@@ -61,11 +61,7 @@ const DOC_LABELS: Record<DocumentType, string> = {
 
 const STEP_LABELS = ['Adding document', 'Uploading photos', 'Verifying document'];
 
-/** Rejections shown as a popup: expired (app check), someone else's face
- *  (DOCUMENT_FACE_MISMATCH), name differs (app check, or the server's
- *  PROFILE_MISMATCH, which also covers date of birth). */
-type RejectKind = 'expired' | 'face' | 'name' | 'profile';
-
+/** Rejections shown as a popup, by the server's reasonCode (verifyOutcome). */
 const rejectCopy = (kind: RejectKind, first: string): { title: string; body: string } => {
   const whose = first ? `${first}'s` : "this member's";
   switch (kind) {
@@ -76,10 +72,10 @@ const rejectCopy = (kind: RejectKind, first: string): { title: string; body: str
         title: `This isn't ${whose} document`,
         body: `The photo on this document doesn't match ${whose} face. Scan ${whose} own document.`,
       };
-    case 'name':
+    case 'review':
       return {
-        title: "Name doesn't match",
-        body: `The name on this document doesn't match ${whose} name. Scan ${whose} own document.`,
+        title: 'Name needs checking',
+        body: `The name on this document is written differently from ${whose} name (for example accents, initials or word order), so it couldn't be confirmed automatically. Check ${whose} name, or use another document.`,
       };
     case 'profile':
       return {
@@ -148,22 +144,6 @@ export default function FamilyProcessingScreen() {
     void queryClient.invalidateQueries({ queryKey: documentKeys.all });
   };
 
-  /** The member's full name for the name check — cached member, else GET
-   *  /family/{id}, else the route name. '' (no check) when none. */
-  const memberName = async (): Promise<string> => {
-    if (!personId) return '';
-    try {
-      const m = await queryClient.ensureQueryData({
-        queryKey: familyKeys.detail(personId),
-        queryFn: () => api.getFamilyMember(personId),
-      });
-      if (m?.name) return m.name;
-    } catch {
-      // Fall through to the route name.
-    }
-    return params.name ?? '';
-  };
-
   const refreshReads = (docId: string) => {
     // Documents, identity, security score, account activity, images.
     refreshAfterVerify(queryClient, docId);
@@ -188,6 +168,7 @@ export default function FamilyProcessingScreen() {
         throw new Error('No document photo found. Please scan it again.');
       }
       let doc = createdDocRef.current;
+      const reused = !!doc;
       if (!doc) {
         setStepIndex(0);
         doc = await log.step(
@@ -212,24 +193,22 @@ export default function FamilyProcessingScreen() {
       const sameTypeBefore = (queryClient.getQueryData<IdentityDocument[]>(documentKeys.member(personId)) ?? [])
         .filter((d) => d.type === docType && d.id !== doc.id)
         .map((d) => d.id);
-      const verdict = await verifyDocumentWithUploads({
+      // A Retry after a lost answer: the server may already have approved
+      // this document. Its stored state is the answer then — no re-scan.
+      const stored = reused ? alreadyVerified(await api.getDocument(doc.id).catch(() => null)) : null;
+      if (stored) log.info('already verified on the server', { document: doc.id });
+      const verdict = stored ?? await verifyDocumentWithUploads({
         documentId: doc.id,
         frontBase64: scan.documentImageBase64,
         backBase64: scan.backImageBase64,
         onStep: (s) => setStepIndex(s === 'uploading' ? 1 : 2),
         log,
       });
-      // The server doesn't check expiry, and its name check can pass a
-      // document that clearly isn't this member's — an approval failing
-      // either is discarded like a rejection.
-      let appCheck: 'expired' | 'name' | null = null;
-      if (isApproved(verdict)) {
-        if (isExpired(verdict.dateOfExpiry)) appCheck = 'expired';
-        else if (!namesMatch(await memberName(), verdict.extractedName)) appCheck = 'name';
-      }
+      // The server's answer is the outcome: it checks expiry and compares the
+      // name itself, and an approval it gave is never undone here.
       refreshReads(doc.id);
       clearScanResult();
-      if (isApproved(verdict) && !appCheck) {
+      if (isApproved(verdict)) {
         log.end('approved', { document: doc.id });
         setStatus('approved');
         void removeLeftovers(doc.id, log, sameTypeBefore);
@@ -243,26 +222,26 @@ export default function FamilyProcessingScreen() {
       // Rejected: don't leave a "Not verified" copy on the member page — it
       // reads as added. The reason is shown here; earlier unverified tries
       // of this type go too (removeLeftovers keeps a verified one).
-      try {
-        await api.removeDocument(doc.id);
-        await clearDocumentImages(doc.id);
-        createdDocRef.current = null;
-        log.info('discarded this attempt', { document: doc.id });
-      } catch (e) {
-        log.warn('document not removed', { document: doc.id, ...errorFields(e) });
+      // Never one the server holds as verified (a re-scan of a verified
+      // document that failed for glare keeps its approval).
+      if (mayDiscard(verdict.document?.status)) {
+        try {
+          await api.removeDocument(doc.id);
+          await clearDocumentImages(doc.id);
+          createdDocRef.current = null;
+          log.info('discarded this attempt', { document: doc.id });
+        } catch (e) {
+          log.warn('document not removed', { document: doc.id, ...errorFields(e) });
+        }
+      } else {
+        log.info('attempt kept: verified on the server', { document: doc.id });
       }
       void removeLeftovers(doc.id, log, sameTypeBefore);
-      // Not this member's document (expired, someone else's face or name):
-      // a popup over the result. Other rejections keep their action below.
-      const kind: RejectKind | null =
-        appCheck ??
-        (verdict.reasonCode === 'DOCUMENT_FACE_MISMATCH'
-          ? 'face'
-          : verdict.reasonCode === 'PROFILE_MISMATCH'
-            ? 'profile'
-            : null);
+      // Expired, someone else's face, different details, or a name to be
+      // checked: a popup over the result. Other rejections keep their action below.
+      const kind: RejectKind | null = rejectKind(verdict.reasonCode);
       log.end('rejected', {
-        reason: appCheck ? `app:${appCheck}` : verdict.reasonCode,
+        reason: verdict.reasonCode,
         match: verdict.matchScore,
         next: kind ? 'popup' : 'rejected',
       });

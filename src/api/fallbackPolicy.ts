@@ -13,6 +13,13 @@ export const NO_MOCK_FALLBACK: ReadonlySet<string> = new Set([
   'updateFace',
   'finalizeLiveness',
   'getFamilyMemberFaceStatus',
+  // A mock must never claim a parent's consent to a child's photo enrolment.
+  'getMemberPhotoConsent',
+  'giveMemberPhotoConsent',
+  'withdrawMemberPhotoConsent',
+  // Nor a parent's guardianship evidence status, or its submission.
+  'getGuardianVerification',
+  'submitGuardianVerification',
   // A mock answer must never stand in for the server's Regula liveness
   // verdict, nor tell the app the server runs the ML Kit challenge.
   'createRegulaLivenessSession',

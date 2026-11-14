@@ -14,13 +14,14 @@
  * no other liveness to fall back to.
  */
 import {
-  regulaFailure,
-  regulaOutcome,
+  createRegulaRunner,
+  type FaceSdkModule,
   type RegulaOutcome,
   type RegulaRunConfig,
+  type RunAppearance,
 } from '@/features/liveness/regulaLiveness';
 
-let faceSdkModule: any = null;
+let faceSdkModule: FaceSdkModule | null = null;
 let loadAttempted = false;
 
 function loadFaceSdk(): boolean {
@@ -50,59 +51,14 @@ export function isRegulaFaceSdkAvailable(): boolean {
   return loadFaceSdk();
 }
 
-let initPromise: Promise<boolean> | null = null;
-
-/** Initialize once (Core Basic needs no license on the phone); a failure retries next time. */
-function ensureInitialized(): Promise<boolean> {
-  if (!initPromise) {
-    const sdk = faceSdkModule.FaceSDK.instance;
-    initPromise = (async () => {
-      if (await sdk.isInitialized()) return true;
-      const [success, error] = await sdk.initialize();
-      if (!success) console.warn('[RegulaLiveness] initialize failed', error?.code, error?.message);
-      return Boolean(success);
-    })().catch((err: unknown) => {
-      console.warn('[RegulaLiveness] initialize threw', (err as Error)?.message);
-      return false;
-    });
-    initPromise.then((ok) => {
-      if (!ok) initPromise = null;
-    });
-  }
-  return initPromise;
-}
-
 /**
- * Run Regula liveness once. Resolves, never rejects: a transaction for the
- * server to verify, a cancellation, or a failure with a message to show.
+ * Run Regula liveness once (regulaLiveness.createRegulaRunner), in the
+ * TruePas colors and words when given an appearance (regulaAppearance). Resolves,
+ * never rejects: a transaction for the server to verify, a cancellation, or
+ * a failure with a message to show — a timeout or a missing SDK included.
  */
-export async function runRegulaLiveness({ serviceUrl, tag }: RegulaRunConfig): Promise<RegulaOutcome> {
-  if (!loadFaceSdk()) return regulaFailure('unavailable');
-  if (!(await ensureInitialized())) return regulaFailure('unavailable');
-  const { FaceSDK, LivenessConfig, LivenessType, LivenessSkipStep, RecordingProcess } = faceSdkModule;
-  const sdk = FaceSDK.instance;
-  try {
-    sdk.serviceUrl = serviceUrl;
-    const response = await sdk.startLiveness({
-      config: new LivenessConfig({
-        // The server's per-session nonce: it accepts only a transaction carrying it.
-        tag,
-        // The mode the server accepts by default (REGULA_ALLOWED_LIVENESS_TYPES=0).
-        livenessType: LivenessType.ACTIVE,
-        // The app has its own instructions and its own result screen, shown
-        // only after the server has verified the transaction.
-        skipStep: [LivenessSkipStep.ONBOARDING_STEP, LivenessSkipStep.SUCCESS_STEP],
-        closeButtonEnabled: true,
-        // No device location, and no session video: only liveness is needed.
-        locationTrackingEnabled: false,
-        recordingProcess: RecordingProcess.NOT_UPLOAD,
-      }),
-    });
-    const outcome = regulaOutcome(response);
-    console.log('[RegulaLiveness] outcome', outcome.kind, outcome.kind === 'failed' ? outcome.reason : '');
-    return outcome;
-  } catch (err) {
-    console.warn('[RegulaLiveness] startLiveness threw', (err as Error)?.message);
-    return regulaFailure('failed');
-  }
-}
+export const runRegulaLiveness: (config: RegulaRunConfig, appearance?: RunAppearance) => Promise<RegulaOutcome> = createRegulaRunner(
+  () => (loadFaceSdk() ? faceSdkModule : null),
+  {},
+  (...args) => console.log(...args),
+);

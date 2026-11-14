@@ -267,7 +267,7 @@ No skip button. User must complete face enrollment to enter the app.
 - `/face-update/pin` → `/face-update/camera` → `/face-update/success` — Update face
 - `/family/add` (4-step: basic info → document → face-capture/rejected)
 - `/family/[id]` — Family member detail
-- `/document/select-type` → `/document/scan` → `/document/processing` → `/document/verified`/`mismatch`
+- `/document/select-type` → `/document/scan` → `/document/processing` → `/document/verified` (a rejection: a popup on processing, or `/document/rejected`)
 - `/document/[id]` — Document detail
 - `/booking/[id]` — Booking detail
 - `/settings` — App settings
@@ -350,9 +350,6 @@ Verification in progress (loading animation).
 
 ### `document/verified.tsx`
 Document verified success screen.
-
-### `document/mismatch.tsx`
-Document verification failed (selfie mismatch).
 
 ### `document/[id].tsx`
 Document detail view.
@@ -847,6 +844,7 @@ EXPO_PUBLIC_FALLBACK_TO_MOCK=true                            # Fall back to mock
 | `EXPO_PUBLIC_FALLBACK_TO_MOCK` | `true` / `false` | If `true`, 503/network errors fall back to mock data |
 | `EXPO_PUBLIC_API_URL` | URL | BFF base URL |
 | `EXPO_PUBLIC_LIVENESS_URL` | URL | Liveness service base URL |
+| `EXPO_PUBLIC_LIVENESS_CHALLENGE_FALLBACK` | `false` (default) / `true` | Liveness is Regula Face SDK liveness; a server not on Regula (503 `REGULA_LIVENESS_DISABLED`) fails the check. `true` = run the older ML Kit challenge on such a server instead (temporary; mock mode needs it) |
 
 ### Two Axios Clients
 

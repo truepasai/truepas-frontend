@@ -1,6 +1,8 @@
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
 
 import { memberCaptureMode } from '@/features/family/memberSetupState';
+import type { GuardianEvidenceUpload, GuardianVerification } from '@/features/family/guardianVerification';
+import type { PhotoConsentStatus } from '@/features/family/photoConsent';
 import { clearReauthToken, peekReauthToken, setReauthToken, takeReauthToken } from '@/services/reauth';
 import type {
     AccountDetailsRequest,
@@ -103,6 +105,17 @@ import userData from './data/user.json';
  * implements the same signatures against the real backend.
  */
 const LATENCY_MS = 450;
+
+const mockPhotoConsents = new Map<string, PhotoConsentStatus>();
+// Explicit mock mode only: a submission stays pending; a mock never verifies a guardianship.
+const mockGuardianVerifications = new Map<string, GuardianVerification>();
+const mockGuardianVerification = (id: string): GuardianVerification =>
+  mockGuardianVerifications.get(id) ?? {
+    status: 'not_submitted', evidenceType: null, submittedAt: null, reviewedAt: null, rejectionReason: null,
+    informationRequest: null, revokedAt: null, canSubmit: true, submissionEnabled: true,
+    evidenceTypes: ['birth_certificate', 'court_guardianship_order', 'adoption_documents', 'other_official_evidence'],
+    fileTypes: ['application/pdf', 'image/jpeg', 'image/png'], maxBytes: 10 * 1024 * 1024,
+  };
 
 function respond<T>(data: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(data), LATENCY_MS));
@@ -259,6 +272,8 @@ const REASON_MESSAGES: Record<DocumentReasonCode, string> = {
   FACE_NOT_ENROLLED: 'Verify this document with a live selfie, or set up the face first.',
   DOCUMENT_FACE_MISMATCH: 'The photo on this document does not match your enrolled face. Make sure it is your own document.',
   PROFILE_MISMATCH: 'The details on this document do not match your profile. Check the document or update your profile.',
+  NAME_REVIEW_REQUIRED: "The name on this document is written differently from the name on the profile (for example accents, initials or word order), so it can't be confirmed automatically. Check the name on the profile or use another document.",
+  DOCUMENT_EXPIRED: 'This document has expired. Use a document that is still valid.',
   DOCUMENT_CHECKS_INCONCLUSIVE: "We couldn't confirm this document automatically. Retake the photos in good light or try another document.",
 };
 
@@ -337,6 +352,27 @@ export const mockApi = {
   getFamilyMemberFaceStatus: (id: string): Promise<MemberFaceStatus> => {
     const m = family.find((f) => f.id === id);
     return respond({ faceEnrolled: m?.faceEnrolled === true, faceEnrollmentRef: m?.faceEnrollmentRef ?? null });
+  },
+  // Explicit mock mode only (EXPO_PUBLIC_USE_MOCK_API): consent kept in memory.
+  getMemberPhotoConsent: (id: string): Promise<PhotoConsentStatus> =>
+    respond(mockPhotoConsents.get(id) ?? { active: false }),
+  giveMemberPhotoConsent: (id: string, noticeVersion: string): Promise<PhotoConsentStatus> => {
+    const status = { active: true, noticeVersion, acceptedAt: new Date().toISOString() };
+    mockPhotoConsents.set(id, status);
+    return respond(status);
+  },
+  withdrawMemberPhotoConsent: (id: string): Promise<PhotoConsentStatus> => {
+    mockPhotoConsents.delete(id);
+    return respond({ active: false });
+  },
+  getGuardianVerification: (id: string): Promise<GuardianVerification> => respond(mockGuardianVerification(id)),
+  submitGuardianVerification: (id: string, upload: GuardianEvidenceUpload): Promise<GuardianVerification> => {
+    const status: GuardianVerification = {
+      ...mockGuardianVerification(id), status: 'pending_review', evidenceType: upload.evidenceType,
+      submittedAt: new Date().toISOString(), canSubmit: false,
+    };
+    mockGuardianVerifications.set(id, status);
+    return respond(status);
   },
   getFamilyActivity: (id: string): Promise<ActivityLogItem[]> => {
     const m = family.find((f) => f.id === id);

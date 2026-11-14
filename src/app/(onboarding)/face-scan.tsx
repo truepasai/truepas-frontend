@@ -43,7 +43,7 @@ export default function FaceScanScreen() {
           center
           title="Prove it's"
           accent="really you"
-          sub="We'll guide you through a few quick movements on camera."
+          sub="First a quick face photo, then a short liveness check."
         />
         <View style={{ alignItems: 'center' }}>
           <FaceRing dark size={200} mode="idle" photo={false} />

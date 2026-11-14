@@ -49,6 +49,7 @@ export default function FaceUpdateCameraScreen() {
         mode={firstEnrolment ? 'enroll' : 'update'}
         personId={personId}
         allowBackCamera={allowBackCamera}
+        subjectAge={Number.isFinite(ageNum) ? ageNum : undefined}
         onReauthRequired={(reason: ReauthReason) =>
           router.replace({ pathname: '/face-update/pin', params: { ...pinParams, reason } })
         }

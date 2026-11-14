@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { cleanName, nameError } from '@/features/names/nameRules';
 import { ADULT_AGE, ageFromDob } from '@/utils/age';
 
 /** Input validation at the trust boundary (OWASP A03 — injection defense in depth). */
@@ -31,12 +32,15 @@ export const newPasswordSchema = z
   .regex(/[^A-Za-z0-9]/, 'Must contain at least one special character');
 
 export const accountDetailsSchema = z.object({
+  // The same rule customer-account-service applies (any script, initials,
+  // apostrophes, hyphens); the value submitted is the cleaned one.
   fullName: z
     .string()
-    .trim()
-    .min(2, 'Enter your full name')
-    .max(100, 'Too long')
-    .regex(/^[\p{L}\s.'-]+$/u, 'Name contains invalid characters'),
+    .transform(cleanName)
+    .superRefine((value, ctx) => {
+      const problem = nameError(value);
+      if (problem) ctx.addIssue({ code: 'custom', message: problem });
+    }),
   dateOfBirth: z
     .string()
     .trim()

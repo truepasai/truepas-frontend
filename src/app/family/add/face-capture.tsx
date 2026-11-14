@@ -1,6 +1,8 @@
 /** @jsxImportSource react */
 /**
- * Family member face — liveness + face enrollment for ages 5+.
+ * Family member face — liveness + face enrollment for ages 5+ (under 5 use
+ * photo-capture). The member's age goes to LivenessCamera: under 10 gets the
+ * child capture limits and guardian wording.
  * Shows the checklist intro first, then mounts LivenessCamera with personId
  * (the camera owns its own stages — see AGENTS.md: don't re-mount or wrap
  * the Camera). Members under 10 get the front/back camera toggle (a parent
@@ -27,6 +29,7 @@ import { useToast } from '@/components/composite/Toast';
 import { type ReauthReason, useDiscardNewMemberOnLeave, useMemberFaceUpdateGate } from '@/features/family/hooks';
 import { loadLivenessCamera } from '@/features/liveness/cameraModule';
 import { FaceRing } from '@/premium/blocks';
+import { CameraPermissionGate } from '@/premium/flows/faceCamera';
 import { CameraUnavailableView, GlassPill, GlassRow, NightStage } from '@/premium/flows/family';
 import { Button, Row, Txt } from '@/premium/ui';
 import { hasReauthToken } from '@/services/reauth';
@@ -36,8 +39,14 @@ const LivenessCamera = loadLivenessCamera();
 type Item = { icon: LucideIcon; title: string; body: string };
 
 const BASICS: Item[] = [
-  { icon: ListChecks, title: 'Follow the prompts', body: 'A few quick movements on camera.' },
+  { icon: ListChecks, title: 'A photo, then liveness', body: 'The photo is taken on its own, then a short check in an oval.' },
   { icon: Sun, title: 'Good light', body: 'Hold still facing the camera.' },
+];
+
+/** Under 10: the adult holding the phone follows the prompts for the child. */
+const CHILD_BASICS: Item[] = [
+  { icon: ListChecks, title: 'You hold the phone', body: 'Keep their face in the circle; the photo is taken on its own.' },
+  { icon: Sun, title: 'Good light, eye level', body: 'Then help them follow the short check in the oval.' },
 ];
 
 const CHECKLIST: Item[] = [
@@ -167,9 +176,11 @@ export default function FamilyFaceCaptureScreen() {
             borderWidth: 1,
             borderColor: 'rgba(255,255,255,0.1)',
           }}>
-          {(isUpdate ? UPDATE_CHECKLIST : inSetup ? SETUP_CHECKLIST : CHECKLIST).map((c) => (
-            <GlassRow key={c.title} icon={c.icon} title={c.title} body={c.body} />
-          ))}
+          {(allowBackCamera ? CHILD_BASICS : BASICS)
+            .concat((isUpdate ? UPDATE_CHECKLIST : inSetup ? SETUP_CHECKLIST : CHECKLIST).slice(BASICS.length))
+            .map((c) => (
+              <GlassRow key={c.title} icon={c.icon} title={c.title} body={c.body} />
+            ))}
         </View>
         <Row gap={8} style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
           <GlassPill label="Front camera" active />
@@ -182,13 +193,16 @@ export default function FamilyFaceCaptureScreen() {
   if (!LivenessCamera) return <CameraUnavailableView />;
 
   return (
-    <LivenessCamera
-      mode={isUpdate ? 'update' : 'enroll'}
-      personId={personId}
-      allowBackCamera={allowBackCamera}
-      nextLabel={inSetup ? 'Continue' : undefined}
-      onReauthRequired={isUpdate ? backToPin : undefined}
-      onSuccess={isUpdate ? () => backToMember('Face updated') : onEnrolled}
-    />
+    <CameraPermissionGate topTitle={isUpdate ? 'Update face' : 'Face enrollment'}>
+      <LivenessCamera
+        mode={isUpdate ? 'update' : 'enroll'}
+        personId={personId}
+        allowBackCamera={allowBackCamera}
+        subjectAge={Number.isFinite(ageNum) ? ageNum : undefined}
+        nextLabel={inSetup ? 'Continue' : undefined}
+        onReauthRequired={isUpdate ? backToPin : undefined}
+        onSuccess={isUpdate ? () => backToMember('Face updated') : onEnrolled}
+      />
+    </CameraPermissionGate>
   );
 }

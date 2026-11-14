@@ -3,12 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Animated,
     Easing,
-    Linking,
     Platform,
     StyleSheet,
-    View
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import {
     Camera,
     useCameraDevice,
@@ -18,33 +15,55 @@ import {
 } from 'react-native-vision-camera';
 import {
     createFaceDetectorOutput,
+    createImageFaceDetector,
     type Face,
+    type ImageFaceDetector,
 } from 'react-native-vision-camera-face-detector';
 import { runOnJS } from 'react-native-worklets';
 
 import { toApiError } from '@/api/errors';
-import { Alert, ScreenHeader } from '@/components/composite';
-import {
-    CoreButton,
-    Spinner,
-    Typography
-} from '@/components/ui';
 import { useEnrollFace, useUpdateFace } from '@/features/auth/mutations';
 import { type ReauthReason, useRefreshAfterFaceChange, useRememberMemberPhoto } from '@/features/family/hooks';
+import { memberCaptureMode } from '@/features/family/memberSetupState';
+import { DETECTOR_MIN_FACE, checkPhotoFaces, errorDetail, isDetectorDefect, type PhotoIssue } from '@/features/family/photoQuality';
 // Premium (TruePas 3.0) stage UIs — same props as LivenessStages; camera stays mounted per AGENTS.md.
 import {
+  PremiumCameraStateStage as CameraStateStage,
+  PremiumCaptureStage as CaptureStage,
   PremiumChallengeStage as ChallengeStage,
   PremiumFinishingStage as FinishingStage,
+  PremiumLivenessHandoffStage as HandoffStage,
   PremiumLivenessResultStage as LivenessResultStage,
+  PremiumNoticeStage as NoticeStage,
 } from '@/premium/flows/face';
+import { CameraPermissionGate } from '@/premium/flows/faceCamera';
+import { C } from '@/premium/theme';
+import {
+  CAPTURE_COPY,
+  CAPTURE_RULES,
+  CAPTURE_TIMEOUT_MS,
+  MAX_REFUSED_PHOTOS,
+  captureGuidance,
+  captureMessage,
+  captureSubject,
+  problemMessage,
+  createStableFaceCapture,
+  facingCamera,
+  type CaptureRules,
+  type CaptureState,
+  type FaceProblem,
+  type FaceSample,
+  type StableFaceCapture,
+} from '@/features/liveness/faceCapture';
 import { uprightFrame } from '@/features/liveness/frame';
+import { regulaAppearance } from '@/features/liveness/regulaAppearance';
 import { runRegulaLiveness } from '@/features/liveness/regulaFaceSdk';
+import { serverFailure, type LivenessFailure, type RegulaRunConfig } from '@/features/liveness/regulaLiveness';
 import { useLivenessSession } from '@/features/liveness/useLivenessSession';
 import { clearCooldown, cooldownKey, setCooldown } from '@/services/cooldowns';
 import { flowGuards } from '@/services/flowGuards';
 import { hasReauthToken } from '@/services/reauth';
 import { useAppSelector } from '@/store';
-import { useThemeTokens } from '@/theme';
 import { errorHaptic, successHaptic, tapHaptic } from '@/services/haptics';
 
 /** A passed liveness capture, for a server-side 1:1 match (verify mode). */
@@ -81,6 +100,9 @@ interface LivenessCameraProps {
   onReauthRequired?: (reason: ReauthReason) => void;
   /** Passed-stage button label (default: Done for members, else Continue). */
   nextLabel?: string;
+  /** The family member's age, when known: under 10 gets the child capture
+   *  limits and guardian wording; under 5 never runs liveness (photo instead). */
+  subjectAge?: number;
 }
 
 // Calibration thresholds (per guide §4.5 — tune on real devices)
@@ -99,19 +121,74 @@ const STILL_YAW_DELTA = 2.5; // degrees between samples
 const STEADY_SAMPLES = 4;
 const STEADY_MAX_WAIT_MS = 4000;
 
+/** One detector face as a plain sample (Nitro objects don't cross runOnJS). */
+function toSample(face: Face): FaceSample {
+  return {
+    bounds: { x: face.bounds.x, y: face.bounds.y, width: face.bounds.width, height: face.bounds.height },
+    frameWidth: face.frameWidth,
+    frameHeight: face.frameHeight,
+    yaw: face.yawAngle,
+    pitch: face.pitchAngle,
+    roll: face.rollAngle,
+    leftEyeOpen: face.leftEyeOpenProbability,
+    rightEyeOpen: face.rightEyeOpenProbability,
+  };
+}
+
+/** The still photo's own checks (photoQuality) as capture problems. */
+const STILL_PROBLEMS: Partial<Record<PhotoIssue, FaceProblem>> = {
+  no_face: 'no_face',
+  several_faces: 'several_faces',
+  off_frame: 'cut_off',
+  too_small: 'too_far',
+};
+
+/**
+ * Why the photo just taken can't be the enrolled face, or null when it can:
+ * exactly one face, fully in view and large enough (the same check as a
+ * child's enrollment photo), facing the camera. Without a working still-image
+ * detector on this phone the preview's checks stand, logged by category:
+ * `detector_defect` is the detector library's own still-photo defect (fixed
+ * by patches/, so seen only on an older build), never a face verdict.
+ */
+function stillPhotoProblem(detector: ImageFaceDetector | null, uri: string, rules: CaptureRules): FaceProblem | null {
+  if (!detector) return null;
+  let faces: Face[];
+  try {
+    faces = detector.detectFaces(uri);
+  } catch (err) {
+    const detail = errorDetail(err);
+    console.warn(
+      `[FaceCapture] still-photo face check skipped, preview checks stand: category=${isDetectorDefect(detail) ? 'detector_defect' : 'detector_failed'} error="${detail.replace(/"/g, "'")}"`,
+    );
+    return null;
+  }
+  const plain = faces.map((f) => ({ bounds: f.bounds, frameWidth: f.frameWidth, frameHeight: f.frameHeight }));
+  const size = plain[0] ? { width: plain[0].frameWidth, height: plain[0].frameHeight } : { width: 1, height: 1 };
+  const check = checkPhotoFaces(plain, size);
+  if (!check.ok) return STILL_PROBLEMS[check.issue] ?? 'no_face';
+  const face = faces.reduce((a, b) => (b.bounds.width > a.bounds.width ? b : a));
+  return facingCamera({ yaw: face.yawAngle, pitch: face.pitchAngle, roll: face.rollAngle }, rules) ? null : 'turned';
+}
+
 /**
  * Face capture + liveness camera using react-native-vision-camera v5
  * + ML Kit face detector, with the liveness check the server runs.
  *
  * Regula (the server's liveness service on LIVENESS_PROVIDER=regula):
  *  1. Request camera permissions; create a Regula session
- *  2. Capture the face image: high-res photo once the face is frontal and
- *     still (ML Kit is used only for that), uploaded to the session
- *  3. Regula liveness on its own screen; the server verifies the transaction
+ *  2. Capture the face image (faceCapture): once one face is centered, near
+ *     enough, facing the camera and has stayed still for a full second, a
+ *     high-res photo is taken, checked again on the phone (one face, fully in
+ *     view, large enough, facing the camera) and only then uploaded
+ *  3. Regula liveness on its own screen, in TruePas colors and words
+ *     (regulaAppearance); the server verifies the transaction
  *  4. Call face enroll/update with session credentials — the image enrolled
  *     is the one captured in step 2
  *
- * ML Kit challenge (otherwise, per REACT_NATIVE_KYC_INTEGRATION_GUIDE.md §4):
+ * ML Kit challenge (only when the server is not on Regula and the build sets
+ * EXPO_PUBLIC_LIVENESS_CHALLENGE_FALLBACK=true — useLivenessSession; per
+ * REACT_NATIVE_KYC_INTEGRATION_GUIDE.md §4):
  *  1. Request camera permissions
  *  2. Create liveness challenge (server-provided sequence)
  *  3. Frame processor auto-detects blink/turn via ML Kit face landmarks
@@ -130,9 +207,9 @@ export function LivenessCamera({
   allowBackCamera,
   onReauthRequired,
   nextLabel,
+  subjectAge,
 }: LivenessCameraProps) {
   const { hasPermission, requestPermission } = useCameraPermission();
-  const theme = useThemeTokens();
   const [capturing, setCapturing] = useState(false);
   // Challenge is created on mount; the guided dial renders as soon as the
   // challenge arrives and detection begins immediately (no intro gate).
@@ -160,11 +237,31 @@ export function LivenessCamera({
   const [deadEnd, setDeadEnd] = useState(false);
   const accountId = useAppSelector((state) => state.auth.user?.id);
   const faceLimitKey = accountId ? cooldownKey('face-update', accountId, personId ?? 'self') : null;
+  // Members under 5 enroll with a photo and never run liveness (the backend
+  // refuses them a liveness session): this screen says so and starts nothing.
+  const photoOnly = !!personId && memberCaptureMode(null, subjectAge) === 'photo';
+  const subject = captureSubject(personId, subjectAge);
+  const rules = CAPTURE_RULES[subject];
+  const appearance = useMemo(
+    () => regulaAppearance({ background: C.navyNight, accent: C.sky, accentLight: C.skyLight, text: C.white }, subject),
+    [subject],
+  );
 
   // Under-10 members may flip to the rear camera (parent holds the phone);
   // everyone else stays front-only per the age-band spec.
   const [cameraPosition, setCameraPosition] = useState<'front' | 'back'>('front');
   const device = useCameraDevice(cameraPosition);
+  // ML Kit's still-image detector checks the photo itself before it is sent.
+  // Created here, not during render: a phone that can't create it then still
+  // runs the live checks (logged).
+  const stillDetector = useMemo<ImageFaceDetector | null>(() => {
+    try {
+      return createImageFaceDetector({ performanceMode: 'accurate', minFaceSize: DETECTOR_MIN_FACE });
+    } catch (err) {
+      console.warn(`[FaceCapture] still-photo face check unavailable, preview checks stand: category=detector_unavailable error="${errorDetail(err).replace(/"/g, "'")}"`);
+      return null;
+    }
+  }, []);
   // JPEG, not the 'native' default: that is HEIC on iOS, which the backend
   // can't decode ("Unsupported frame type" / "no face detected").
   const photoOutput = usePhotoOutput({ containerFormat: 'jpeg' });
@@ -182,19 +279,26 @@ export function LivenessCamera({
   const steadyRef = useRef<{ count: number; lastYaw: number | null }>({ count: 0, lastYaw: null });
   const finalizeStartedAt = useRef(0);
   const finalizeTriggered = useRef(false);
-  // Regula's face capture: when one face was first in view (0 = not yet).
-  // The challenge leaves a face in view before its capture; a fresh capture
-  // first waits for one.
-  const faceSeenAt = useRef(0);
-  // Regula liveness is started once per captured image.
+  // Regula's face photo: the stable-face machine (one per capture phase), what
+  // it last saw, photos refused on the phone so far, and a one-shot guard on
+  // taking the photo.
+  const captureRef = useRef<StableFaceCapture | null>(null);
+  const [captureView, setCaptureView] = useState<CaptureState>({ status: 'searching' });
+  const [captureNotice, setCaptureNotice] = useState<string | null>(null);
+  const [captureElapsed, setCaptureElapsed] = useState(0);
+  const captureStartedAt = useRef(0);
+  const refusedPhotos = useRef(0);
+  const takingPhoto = useRef(false);
+  const phaseRef = useRef(liveness.phase);
+  // Regula liveness is started once per captured image; `regulaDone` once its
+  // screen has closed and the server is reading the verdict.
   const regulaStarted = useRef(false);
+  const [regulaDone, setRegulaDone] = useState(false);
   const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Transient UX hints (too-fast action, multiple faces) shown under the dial
   const [hint, setHint] = useState<string | null>(null);
   const [multiFace, setMultiFace] = useState(false);
-  // True once requestPermission() comes back denied - shows a Settings button
-  const [permDenied, setPermDenied] = useState(false);
   // No camera after a few seconds = device has none / it's busy — don't leave
   // the user staring at "Loading camera..." forever.
   const [deviceTimedOut, setDeviceTimedOut] = useState(false);
@@ -231,7 +335,8 @@ export function LivenessCamera({
   const failWithCooldown = useCallback((err: unknown, fallback: string) => {
     const apiErr = toApiError(err);
     setCooldownLeft(apiErr.status === 429 ? 10 : 3);
-    failSession(apiErr.message || fallback);
+    const failure = (err as { failure?: LivenessFailure } | null)?.failure ?? serverFailure(apiErr);
+    failSession(apiErr.message || fallback, failure);
   }, [failSession]);
 
   // 1s countdown while the failed UI is visible; Try Again stays disabled
@@ -257,7 +362,7 @@ export function LivenessCamera({
   // Update mode first checks the PIN token is still held (5 min, single
   // use): without it PUT /face would fail after the whole challenge.
   useEffect(() => {
-    if (hasPermission && liveness.phase === 'idle') {
+    if (hasPermission && liveness.phase === 'idle' && !photoOnly) {
       if (reauthGated && !hasReauthToken()) {
         // Microtask: settleCameraThen sets state (react-hooks/set-state-in-effect).
         queueMicrotask(() => void settleCameraThen(() => onReauthRequired?.('expired')));
@@ -382,6 +487,13 @@ export function LivenessCamera({
       onFaceSampleRef.current(leftEyeOpen, rightEyeOpen, yaw);
     }),
   );
+  // Regula's photo frames go the same way (onCaptureFrames, below).
+  const onCaptureFramesRef = useRef<(samples: FaceSample[]) => void>(() => {});
+  const [onCaptureFramesJS] = useState(() =>
+    runOnJS((samples: FaceSample[]) => {
+      onCaptureFramesRef.current(samples);
+    }),
+  );
   /* eslint-enable react-hooks/refs */
 
   // Face detection via a dedicated CameraOutput (NOT a frame processor).
@@ -393,6 +505,15 @@ export function LivenessCamera({
   // useCallback stays current — the memoized output can call it directly.
   const handleFaces = useCallback((faces: Face[]) => {
     setMultiFace(faces.length > 1);
+    // Regula's photo: every frame counts, one without a face too (it cancels
+    // the hold). ~10 frames a second.
+    if (phaseRef.current === 'capturing') {
+      const now = Date.now();
+      if (now - lastSampleTs.current < 100) return;
+      lastSampleTs.current = now;
+      onCaptureFramesJS(faces.map(toSample));
+      return;
+    }
     const face = faces[0];
     // Ambiguous frame - don't let a second person satisfy the challenge.
     if (!face || faces.length > 1) {
@@ -404,7 +525,6 @@ export function LivenessCamera({
     const now = Date.now();
     if (now - lastSampleTs.current < 100) return;
     lastSampleTs.current = now;
-    if (faceSeenAt.current === 0) faceSeenAt.current = now;
 
     const leftEye = face.leftEyeOpenProbability ?? 1;
     const rightEye = face.rightEyeOpenProbability ?? 1;
@@ -428,7 +548,7 @@ export function LivenessCamera({
     steadyRef.current = { count: good ? steady.count + 1 : 0, lastYaw: yaw };
 
     onFaceSampleJS(leftEye, rightEye, yaw);
-  }, [onFaceSampleJS, cameraPosition]);
+  }, [onFaceSampleJS, onCaptureFramesJS, cameraPosition]);
 
   /* eslint-disable react-hooks/refs -- the output is created once for the
      Camera's outputs prop; its callbacks run on native face events and read
@@ -452,10 +572,10 @@ export function LivenessCamera({
   );
   /* eslint-enable react-hooks/refs */
 
-  // Capture the high-res face image: the challenge's finalize frame, or
-  // Regula's first step (uploaded before Regula liveness runs).
+  // Capture the challenge's finalize frame (the ML Kit fallback only;
+  // Regula's photo is takeCapturePhoto).
   const captureAndFinalize = useCallback(async () => {
-    if (capturing || (liveness.phase !== 'finalizing' && liveness.phase !== 'capturing')) return;
+    if (capturing || liveness.phase !== 'finalizing') return;
     setCapturing(true);
     console.log('[Liveness] captureAndFinalize: starting photo capture...');
 
@@ -490,14 +610,6 @@ export function LivenessCamera({
       );
       const fileUri = frame.uri;
       capturedUri.current = fileUri;
-
-      if (liveness.method === 'regula') {
-        // Regula decides only liveness: this captured image is what a passed
-        // session hands on to enrollment. Regula runs next (phase checking).
-        console.log('[Liveness] Uploading the face image before Regula liveness...');
-        await liveness.submitCapture(fileUri);
-        return;
-      }
 
       console.log('[Liveness] Calling finalize API...');
       const result = await liveness.finalize(fileUri);
@@ -630,30 +742,41 @@ export function LivenessCamera({
   }, [mode, liveness.phase, liveness.result, enrollFaceNow]);
 
   // Finalizing starts right after the last step — often a head turn — so the
-  // steadiness count starts over from here. Regula's capture starts fresh too.
+  // steadiness count starts over from here. Regula's photo starts a fresh
+  // stable-face machine, with the time allowed counted from now.
   useEffect(() => {
-    if (liveness.phase !== 'finalizing' && liveness.phase !== 'capturing') return;
-    steadyRef.current = { count: 0, lastYaw: null };
-    finalizeStartedAt.current = Date.now();
-    finalizeTriggered.current = false;
-    faceSeenAt.current = 0;
-    if (liveness.phase === 'capturing') {
-      regulaStarted.current = false;
-      // A retry after Regula ran: its screen had this camera released.
-      queueMicrotask(() => setCameraActive(true));
+    phaseRef.current = liveness.phase;
+    if (liveness.phase === 'finalizing') {
+      steadyRef.current = { count: 0, lastYaw: null };
+      finalizeStartedAt.current = Date.now();
+      finalizeTriggered.current = false;
     }
-  }, [liveness.phase]);
+    if (liveness.phase === 'capturing') {
+      const now = Date.now();
+      captureRef.current = createStableFaceCapture(rules, { timeoutMs: CAPTURE_TIMEOUT_MS, startedAt: now });
+      captureStartedAt.current = now;
+      refusedPhotos.current = 0;
+      takingPhoto.current = false;
+      regulaStarted.current = false;
+      queueMicrotask(() => {
+        setCaptureView({ status: 'searching' });
+        setCaptureNotice(null);
+        setCaptureElapsed(0);
+        setRegulaDone(false);
+        // A retry after Regula ran: its screen had this camera released.
+        setCameraActive(true);
+      });
+    }
+  }, [liveness.phase, rules]);
 
-  // Auto-finalize once the face is frontal and still (STEADY_SAMPLES): a
-  // frame taken while the head swings back from the turn makes a blurred,
-  // angled enrolled face, and documents score low against it. Regula's
-  // capture uses the same rule, counted from when a face is first in view.
+  // Auto-finalize the challenge once the face is frontal and still
+  // (STEADY_SAMPLES): a frame taken while the head swings back from the turn
+  // makes a blurred, angled enrolled face, and documents score low against it.
   useEffect(() => {
-    if ((liveness.phase !== 'finalizing' && liveness.phase !== 'capturing') || capturing) return;
-    const fresh = liveness.phase === 'capturing';
+    if (liveness.phase !== 'finalizing' || capturing) return;
     const timer = setInterval(() => {
       if (finalizeTriggered.current) return;
-      const since = fresh ? faceSeenAt.current : finalizeStartedAt.current;
+      const since = finalizeStartedAt.current;
       if (!since) return;
       const waited = Date.now() - since;
       const steady = steadyRef.current.count >= STEADY_SAMPLES;
@@ -669,6 +792,109 @@ export function LivenessCamera({
     return () => clearInterval(timer);
   }, [liveness.phase, capturing, captureAndFinalize]);
 
+  // ── Regula's face photo ──────────────────────────────────────────────
+  // A photo the phone refused (no usable face, or the camera failed to take
+  // it): say why and look again, up to MAX_REFUSED_PHOTOS. Nothing is sent.
+  const refusePhoto = useCallback((message: string) => {
+    refusedPhotos.current += 1;
+    if (refusedPhotos.current >= MAX_REFUSED_PHOTOS) {
+      failSession(CAPTURE_COPY.refused, 'error');
+      return;
+    }
+    setCaptureNotice(message);
+    setCaptureView({ status: 'searching' });
+    captureRef.current?.resume();
+  }, [failSession]);
+
+  // Take the photo once the face has held still, check it on the phone, and
+  // only then upload it; Regula runs next (phase checking). takingPhoto keeps
+  // it to one photo at a time.
+  const { submitCapture } = liveness;
+  const takeCapturePhoto = useCallback(async () => {
+    if (takingPhoto.current || phaseRef.current !== 'capturing') return;
+    takingPhoto.current = true;
+    setCapturing(true);
+    try {
+      let fileUri: string;
+      try {
+        const photoFile = await photoOutput.capturePhotoToFile({ flashMode: 'off' }, {});
+        if (!photoFile) throw new Error('The camera returned no photo');
+        const rawUri = photoFile.filePath.startsWith('file://') ? photoFile.filePath : `file://${photoFile.filePath}`;
+        // This frame becomes the enrolled face that documents are matched
+        // against: send it upright, and log exactly what goes up (frame.ts).
+        const frame = await uprightFrame(rawUri);
+        console.log(
+          '[FaceCapture] frame',
+          frame.before,
+          frame.after ? `→ ${frame.after}` : '',
+          `(${frame.note})`,
+          `camera=${cameraPosition} mode=${mode} subject=${subject}`,
+        );
+        const problem = stillPhotoProblem(stillDetector, frame.uri, rules);
+        if (problem) {
+          console.warn('[FaceCapture] photo refused on the phone:', problem);
+          refusePhoto(problemMessage(problem, subject));
+          return;
+        }
+        fileUri = frame.uri;
+      } catch (err) {
+        console.warn('[FaceCapture] photo not taken:', errorDetail(err));
+        refusePhoto(CAPTURE_COPY.captureFailed);
+        return;
+      }
+      capturedUri.current = fileUri;
+      // Regula decides only liveness: this captured image is what a passed
+      // session hands on to enrollment.
+      console.log('[Liveness] Uploading the face image before Regula liveness...');
+      await submitCapture(fileUri);
+    } catch (err) {
+      console.error('[Liveness] Face image upload failed:', toApiError(err).status);
+      failWithCooldown(err, 'The face photo could not be sent');
+    } finally {
+      takingPhoto.current = false;
+      setCapturing(false);
+    }
+  }, [photoOutput, cameraPosition, mode, subject, stillDetector, rules, refusePhoto, submitCapture, failWithCooldown]);
+
+  // One preview frame's faces: the hold counts on, or starts over.
+  const onCaptureFrames = useCallback((samples: FaceSample[]) => {
+    const machine = captureRef.current;
+    if (!machine || phaseRef.current !== 'capturing') return;
+    const state = machine.update(samples, Date.now());
+    if (state.status === 'timed_out') {
+      failSession(CAPTURE_COPY.timeout, 'timeout');
+      return;
+    }
+    if (state.status === 'captured') return;
+    setCaptureView(state);
+    if (state.status === 'holding' || state.status === 'capture') setCaptureNotice(null);
+    if (state.status === 'capture') void takeCapturePhoto();
+  }, [failSession, takeCapturePhoto]);
+  useEffect(() => {
+    onCaptureFramesRef.current = onCaptureFrames;
+  });
+
+  // Once a second: the time spent (for the tip), and the time allowed even
+  // when the detector reports nothing at all.
+  useEffect(() => {
+    if (liveness.phase !== 'capturing') return;
+    const t = setInterval(() => {
+      const now = Date.now();
+      setCaptureElapsed(now - captureStartedAt.current);
+      if (!takingPhoto.current && captureRef.current?.tick(now)?.status === 'timed_out') {
+        failSession(CAPTURE_COPY.timeout, 'timeout');
+      }
+    }, 1000);
+    return () => clearInterval(t);
+  }, [liveness.phase, failSession]);
+
+  // A refused photo's reason shows for a moment, then the live hints again.
+  useEffect(() => {
+    if (!captureNotice) return;
+    const t = setTimeout(() => setCaptureNotice(null), 3000);
+    return () => clearTimeout(t);
+  }, [captureNotice]);
+
   // Regula liveness, once the face image is up: Regula opens its own camera
   // screen, so this camera is released first. Only the transactionId goes to
   // the server, which decides; a cancel or failure shows the retry UI.
@@ -676,18 +902,24 @@ export function LivenessCamera({
   useEffect(() => {
     if (liveness.phase !== 'checking' || regulaStarted.current) return;
     regulaStarted.current = true;
+    const run = async (config: RegulaRunConfig) => {
+      const outcome = await runRegulaLiveness(config, appearance);
+      // Regula's screen is closed: the server reads the verdict now.
+      setRegulaDone(true);
+      return outcome;
+    };
     void (async () => {
       await Promise.resolve();
       setCameraActive(false);
       await new Promise((resolve) => setTimeout(resolve, 400));
       try {
-        await checkLiveness(runRegulaLiveness);
+        await checkLiveness(run);
       } catch (err: any) {
         console.error('[Liveness] Regula liveness not verified:', err?.response?.status, err?.response?.data?.code);
         failWithCooldown(err, 'Liveness could not be verified');
       }
     })();
-  }, [liveness.phase, checkLiveness, failWithCooldown]);
+  }, [liveness.phase, checkLiveness, failWithCooldown, appearance]);
 
   // ── UI animation hooks (MUST be before any early return) ──────────────
   // Session countdown — expires_in_seconds is a snapshot at challenge
@@ -710,7 +942,7 @@ export function LivenessCamera({
     if (sessionLeft === 0 && (liveness.phase === 'challenging' || liveness.phase === 'capturing')) {
       // queueMicrotask: a synchronous setState inside the effect body trips
       // react-hooks/set-state-in-effect (same pattern as the seed above).
-      queueMicrotask(() => failSession('Your session expired — please try again.'));
+      queueMicrotask(() => failSession('Your session expired — please try again.', 'timeout'));
     }
   }, [sessionLeft, liveness.phase, failSession]);
 
@@ -738,91 +970,34 @@ export function LivenessCamera({
     else if (liveness.phase === 'failed') errorHaptic();
   }, [liveness.phase]);
 
-  // Permission not granted
-  if (!hasPermission) {
+  // A member under 5: photo enrollment, never liveness — nothing was started.
+  if (photoOnly) {
     return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: theme.colors.background,
-          paddingHorizontal: theme.spacing[8],
-        }}
-        edges={['top', 'bottom']}>
-        <Typography variant="body" center style={{ marginBottom: theme.spacing[4] }}>
-          Camera permission is required for face verification.
-        </Typography>
-        <CoreButton
-          onPress={async () => {
-            const granted = await requestPermission();
-            // Permanently denied -> the dialog won't show again; send the
-            // user to system settings instead of a dead button.
-            if (!granted) setPermDenied(true);
-          }}
-          accessibilityLabel="Grant camera permission">
-          Grant Permission
-        </CoreButton>
-        {permDenied ? (
-          <CoreButton
-            variant="outline"
-            style={{ marginTop: theme.spacing[3] }}
-            onPress={() => void Linking.openSettings()}
-            accessibilityLabel="Open app settings">
-            Open Settings
-          </CoreButton>
-        ) : null}
-      </SafeAreaView>
+      <NoticeStage
+        title="Photo"
+        accent="enrollment"
+        sub="Children under 5 enroll with one clear photo instead of a liveness check. Go back and choose Take photo."
+        onBack={() => router.back()}
+      />
     );
   }
 
-  // No camera device
+  // Permission not granted (revoked after the route's own gate): the same
+  // premium permission step, with its Open Settings once denied.
+  if (!hasPermission) {
+    return <CameraPermissionGate>{null}</CameraPermissionGate>;
+  }
+
+  // No camera device yet, or none after a few seconds.
   if (!device) {
-    if (deviceTimedOut) {
-      return (
-        <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: theme.colors.background }}>
-          <ScreenHeader title="Face verification" onBack={() => router.back()} />
-          <View
-            style={{
-              flex: 1,
-              justifyContent: 'center',
-              padding: theme.spacing[4],
-              gap: theme.spacing[4],
-            }}>
-            <Alert variant="error" title="Camera unavailable">
-              No usable camera was found — it may be busy in another app or unavailable on this device.
-            </Alert>
-            <CoreButton
-              fullWidth
-              size="lg"
-              accessibilityLabel="Go back"
-              onPress={() => router.back()}>
-              Go Back
-            </CoreButton>
-          </View>
-        </SafeAreaView>
-      );
-    }
-    return (
-      <SafeAreaView
-        style={{
-          flex: 1,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: theme.colors.background,
-        }}
-        edges={['top', 'bottom']}>
-        <Spinner size="lg" label="Loading camera" />
-        <Typography variant="body-sm" color="secondary" style={{ marginTop: theme.spacing[4] }}>
-          Loading camera...
-        </Typography>
-      </SafeAreaView>
-    );
+    return <CameraStateStage state={deviceTimedOut ? 'unavailable' : 'loading'} onBack={() => router.back()} />;
   }
 
   // Shared camera element — mounted inside the ScanFrame square while
   // challenging (the user sees their own face in the frame) and kept off-screen
   // during finalizing/passed so capturePhotoToFile still has a live camera.
+  // A camera that stops with an error while it's needed fails the session
+  // with advice rather than freezing on a black preview.
   const cameraView = (
     <Camera
       ref={cameraRef}
@@ -833,6 +1008,12 @@ export function LivenessCamera({
       mirrorMode="auto"
       resizeMode="cover"
       implementationMode="compatible"
+      onError={(error: Error) => {
+        console.warn('[FaceCapture] camera error:', errorDetail(error));
+        if (phaseRef.current === 'capturing' || phaseRef.current === 'challenging') {
+          failSession(CAPTURE_COPY.cameraFailed, 'error');
+        }
+      }}
     />
   );
 
@@ -846,6 +1027,7 @@ export function LivenessCamera({
       <LivenessResultStage
         outcome="failed"
         error={liveness.error}
+        failure={liveness.failure}
         primaryLabel={
           deadEnd ? 'Done' : needsPin ? 'Enter PIN again' : cooldownLeft > 0 ? `Try again in ${cooldownLeft}s` : 'Try again'
         }
@@ -856,10 +1038,39 @@ export function LivenessCamera({
     );
   }
 
-  // Regula's `checking`: its own screen is over this one, then the server verifies.
-  const isFinalizing =
-    liveness.phase === 'finalizing' || liveness.phase === 'checking' || (mode === 'verify' && liveness.phase === 'passed');
   const sessionExpiring = sessionLeft != null && sessionLeft > 0 && sessionLeft <= 60;
+
+  // Regula's `checking`: step 2 of the same studio — Regula's own screen
+  // opens over it, then the server reads the verdict. The camera stays
+  // mounted off-screen (released while Regula has the camera).
+  if (liveness.phase === 'checking') {
+    return <HandoffStage phase={regulaDone ? 'verifying' : 'opening'} child={subject === 'child'} cameraSlot={cameraView} />;
+  }
+
+  // Regula's photo (step 1): the live camera in the ring until one face has
+  // held still for a second, then the photo is taken and checked.
+  if (liveness.phase === 'capturing') {
+    const holding = captureView.status === 'holding';
+    const checking = capturing || captureView.status === 'capture' || captureView.status === 'captured';
+    return (
+      <CaptureStage
+        instruction={CAPTURE_COPY.instruction}
+        message={checking ? CAPTURE_COPY.checking : captureNotice ?? captureMessage(captureView, subject)}
+        guidance={captureGuidance(subject, captureElapsed)}
+        holding={holding}
+        progress={holding ? captureView.progress : 0}
+        checking={checking}
+        expiresIn={sessionLeft ?? expiresInSeconds ?? undefined}
+        sessionExpiring={sessionExpiring}
+        camera={cameraView}
+        allowBackCamera={allowBackCamera}
+        cameraPosition={cameraPosition}
+        onSwitchCamera={() => setCameraPosition((p) => (p === 'front' ? 'back' : 'front'))}
+      />
+    );
+  }
+
+  const isFinalizing = liveness.phase === 'finalizing' || (mode === 'verify' && liveness.phase === 'passed');
 
   // Finalize — high-res frame upload + anti-spoof checks. The Camera stays
   // mounted off-screen: photoOutput.capturePhotoToFile still needs it.

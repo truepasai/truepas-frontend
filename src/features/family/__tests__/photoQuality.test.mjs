@@ -14,6 +14,8 @@ import {
   checkPhotoFaces,
   errorDetail,
   guidanceFor,
+  isDetectorDefect,
+  needsAppUpdate,
   photoCheckLog,
 } from '../photoQuality.ts';
 
@@ -71,8 +73,7 @@ describe('photo enrolment for a member under 5', () => {
 
   it('retaking clears the earlier verdict: back at the camera, nothing can be saved', () => {
     assert.equal(saveAfter(run([face()])), true);
-    assert.equal(canSavePhoto({ phase: 'camera' }), false);
-    assert.equal(canSavePhoto({ phase: 'preparing' }), false);
+    for (const phase of ['camera', 'capturing', 'checking', 'failed']) assert.equal(canSavePhoto({ phase }), false, phase);
   });
 });
 
@@ -159,11 +160,61 @@ describe('an unusable image or a detector failure keeps Save disabled and says w
   });
 
   it('every failure message is actionable, and none is the old generic one', () => {
-    for (const code of ['invalid_image', 'image_unreadable', 'detector_unavailable', 'detector_failed', 'no_face', 'several_faces', 'off_frame', 'too_small']) {
+    for (const code of ['invalid_image', 'image_unreadable', 'detector_unavailable', 'detector_defect', 'detector_failed', 'no_face', 'several_faces', 'off_frame', 'too_small']) {
       const text = guidanceFor(code, 'Mia');
       assert.ok(text.length > 20, code);
       assert.doesNotMatch(text, /couldn't check the photo/, code);
     }
+  });
+});
+
+describe("the detector library's still-photo defect (2.0.6, fixed by patches/)", () => {
+  // Its messages as the bridge surfaces them: Android's IllegalArgumentException
+  // and iOS's NSError description, each refusing every photo.
+  const ANDROID = new Error('ImageFaceDetector.detectFaces(...): java.lang.IllegalArgumentException: Invalid image type. Expected string or { uri }');
+  const IOS = new Error('Invalid image type. Expected string or { uri }');
+  const MISSING_URI = new Error("java.lang.IllegalArgumentException: Invalid image object: missing 'uri'");
+
+  it('has its own category, on Android and iOS, with its reason kept for logs', () => {
+    for (const err of [ANDROID, IOS, MISSING_URI]) {
+      const check = throwing(err);
+      assert.equal(check.issue, 'detector_defect', err.message);
+      assert.match(check.detail, /Invalid image/);
+    }
+  });
+
+  it('is never a face verdict, an unreadable file or an ordinary ML Kit failure', () => {
+    const check = throwing(ANDROID);
+    for (const other of ['no_face', 'several_faces', 'off_frame', 'too_small', 'image_unreadable', 'detector_failed']) {
+      assert.notEqual(check.issue, other);
+    }
+  });
+
+  it('keeps Save disabled and says to update the app, since retaking cannot help', () => {
+    const check = throwing(IOS);
+    assert.equal(saveAfter(check), false);
+    assert.match(check.guidance, /Update the app/);
+    assert.equal(needsAppUpdate(check), true);
+    assert.equal(needsAppUpdate(checkPhoto({ image: IMAGE, fileReadable: () => true, detector: { unavailable: new Error('x') } })), true);
+  });
+
+  it('a genuine photo problem or ML Kit failure is still a retake, not an update', () => {
+    for (const check of [run([]), run([face(), face({ bounds: { x: 20, y: 20, width: 250, height: 300 } })]), throwing(new Error('MlKitException: internal error'))]) {
+      assert.equal(needsAppUpdate(check), false, check.issue);
+      assert.equal(saveAfter(check), false, check.issue);
+    }
+    assert.equal(needsAppUpdate({ ok: true }), false);
+  });
+
+  it('is recognized from the logged detail alone (as the 5+ camera logs it)', () => {
+    assert.equal(isDetectorDefect(errorDetail(ANDROID)), true);
+    assert.equal(isDetectorDefect(errorDetail(new Error('Invalid image URI'))), false);
+    assert.equal(isDetectorDefect(errorDetail(new Error('MlKitException: Failed to run face detector'))), false);
+  });
+
+  it('logs as category=detector_defect', () => {
+    const line = photoCheckLog(throwing(ANDROID), { platform: 'android 34', image: IMAGE, camera: 'back', mode: 'enroll' });
+    assert.match(line, /^face=failed category=detector_defect error="Error: ImageFaceDetector\.detectFaces\(\.\.\.\): java\.lang\.IllegalArgumentException: Invalid image type/);
   });
 });
 
@@ -207,7 +258,13 @@ describe('the photo screen (source guard — screens cannot render under node --
     assert.match(camera, /if \(stage\.phase !== 'review' \|\| !canSavePhoto\(stage\) \|\| !personId\) return;/);
     assert.doesNotMatch(cameraCode, /useImageFaceDetector/);
     assert.match(camera, /createImageFaceDetector\(DETECTOR_OPTIONS\)/);
-    assert.match(camera, /Make sure the child's face is clearly visible\./);
+    // Guardian wording, from what the live camera sees (photoCaptureMachine).
+    assert.match(camera, /liveMessage\(live, name \? first : undefined\)/);
+    assert.match(camera, /liveGuidance\(tip\)/);
+  });
+
+  it('a check this app cannot run here ends in Update the app, with no retake and no Save', () => {
+    assert.match(camera, /if \(needsAppUpdate\(check\)\) \{\s*show\(\{ phase: 'failed', title: 'Update the app', body: check\.guidance, retry: false \}\);\s*return;\s*\}\s*show\(\{ phase: 'review', photo, check \}\);/);
   });
 
   it('logs a failed check with its reason, and swallows no detector error', () => {

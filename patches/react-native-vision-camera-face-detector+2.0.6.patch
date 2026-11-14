@@ -1,0 +1,119 @@
+diff --git a/node_modules/react-native-vision-camera-face-detector/android/src/main/java/com/margelo/nitro/camera/facedetector/HybridImageFaceDetector.kt b/node_modules/react-native-vision-camera-face-detector/android/src/main/java/com/margelo/nitro/camera/facedetector/HybridImageFaceDetector.kt
+index 5d116a9..38efdcb 100644
+--- a/node_modules/react-native-vision-camera-face-detector/android/src/main/java/com/margelo/nitro/camera/facedetector/HybridImageFaceDetector.kt
++++ b/node_modules/react-native-vision-camera-face-detector/android/src/main/java/com/margelo/nitro/camera/facedetector/HybridImageFaceDetector.kt
+@@ -22,14 +22,11 @@ class HybridImageFaceDetector(
+   )
+ 
+   private fun resolveInputImage(
+-    input: Any?
++    input: InputImage
+   ): String {
+     return when (input) {
+-      is String -> input
+-      is Map<*, *> -> {
+-        val uri = input["uri"] as? String
+-        uri ?: throw IllegalArgumentException("Invalid image object: missing 'uri'")
+-      }
++      is InputImage.First -> input.value
++      is InputImage.Third -> input.value.uri
+       else -> throw IllegalArgumentException("Invalid image type. Expected string or { uri }")
+     }
+   }
+diff --git a/node_modules/react-native-vision-camera-face-detector/ios/HybridFace.swift b/node_modules/react-native-vision-camera-face-detector/ios/HybridFace.swift
+index f1d44fe..afd601e 100644
+--- a/node_modules/react-native-vision-camera-face-detector/ios/HybridFace.swift
++++ b/node_modules/react-native-vision-camera-face-detector/ios/HybridFace.swift
+@@ -15,6 +15,7 @@ struct FaceProcessConfig {
+   let autoMode: Bool?
+   let cameraFacing: CameraPosition?
+   let orientation: UIInterfaceOrientation?
++  let stillImage: Bool
+ 
+   init(
+     width: Double,
+@@ -27,7 +28,8 @@ struct FaceProcessConfig {
+     trackingEnabled: Bool,
+     autoMode: Bool? = nil,
+     cameraFacing: CameraPosition? = nil,
+-    orientation: UIInterfaceOrientation? = nil
++    orientation: UIInterfaceOrientation? = nil,
++    stillImage: Bool = false
+   ) {
+     self.width = width
+     self.height = height
+@@ -40,6 +42,7 @@ struct FaceProcessConfig {
+     self.autoMode = autoMode
+     self.cameraFacing = cameraFacing
+     self.orientation = orientation
++    self.stillImage = stillImage
+   }
+ }
+ 
+@@ -61,6 +64,16 @@ final class HybridFace: HybridFaceSpec {
+   ) -> Bounds {
+     let scaleX = config.scaleX
+     let scaleY = config.scaleY
++    // A still image's face coordinates are already in the image's own
++    // pixels: no camera-frame swap of x/y or width/height.
++    if config.stillImage {
++      return Bounds(
++        width: boundingBox.width * scaleX,
++        height: boundingBox.height * scaleY,
++        x: boundingBox.minX * scaleX,
++        y: boundingBox.minY * scaleY
++      )
++    }
+     var width: Double
+     var height: Double
+     switch config.orientation {
+diff --git a/node_modules/react-native-vision-camera-face-detector/ios/HybridImageFaceDetector.swift b/node_modules/react-native-vision-camera-face-detector/ios/HybridImageFaceDetector.swift
+index 608050c..3a9cbba 100644
+--- a/node_modules/react-native-vision-camera-face-detector/ios/HybridImageFaceDetector.swift
++++ b/node_modules/react-native-vision-camera-face-detector/ios/HybridImageFaceDetector.swift
+@@ -28,8 +28,9 @@ class HybridImageFaceDetector: HybridImageFaceDetectorSpec {
+       uri: try resolveInputImage(image)
+     )
+     let mlImage = VisionImage(image: uiImage)
+-    let width = Double(uiImage.size.height)
+-    let height = Double(uiImage.size.width)
++    // ML Kit face coordinates are expressed in image pixels, not UIKit points.
++    let width = Double(uiImage.cgImage?.width ?? Int(uiImage.size.width * uiImage.scale))
++    let height = Double(uiImage.cgImage?.height ?? Int(uiImage.size.height * uiImage.scale))
+ 
+     let config = FaceProcessConfig(
+       width: width,
+@@ -39,7 +40,8 @@ class HybridImageFaceDetector: HybridImageFaceDetectorSpec {
+       runLandmarks: runLandmarks,
+       runContours: runContours,
+       runClassifications: runClassifications,
+-      trackingEnabled: trackingEnabled
++      trackingEnabled: trackingEnabled,
++      stillImage: true
+     )
+ 
+     let faces = try faceDetector.results(in: mlImage)
+@@ -52,15 +54,15 @@ class HybridImageFaceDetector: HybridImageFaceDetectorSpec {
+   }
+ 
+   private func resolveInputImage(
+-    _ input: Any
++    _ input: InputImage
+   ) throws -> String {
+-    if let uri = input as? String {
+-      return uri
+-    }
+-
+-    if let object = input as? [String: Any],
+-      let uri = object["uri"] as? String {
+-      return uri
++    switch input {
++      case .first(let uri):
++        return uri
++      case .third(let object):
++        return object.uri
++      case .second:
++        break
+     }
+ 
+     throw NSError(

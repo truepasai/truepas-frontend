@@ -5,6 +5,7 @@ import { Camera, Check, FileText, ScanFace } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { documentNameRows } from '@/features/documents/documentName';
 import { useDocumentImages } from '@/features/documents/hooks';
 import { DocumentCard, FlipCard } from '@/premium/flows/documents';
 import { C } from '@/premium/theme';
@@ -20,8 +21,8 @@ function formatUSDate(value?: string): string {
   return d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 }
 
-/** Document verified (approved only — rejections go to document/rejected or
- *  document/mismatch). Flip card (ref: facepe-user-frontend verify.tsx):
+/** Document verified (approved only — a rejection is a popup on
+ *  document/processing or the document/rejected screen). Flip card (ref: facepe-user-frontend verify.tsx):
  *  front = premium credential card, back = the scan (server image, local
  *  capture as fallback). */
 export default function DocumentVerifiedScreen() {
@@ -32,6 +33,8 @@ export default function DocumentVerifiedScreen() {
     docType,
     docNumber,
     extractedName,
+    extractedGivenNames,
+    extractedSurname,
     extractedDob,
     issuingState,
     nationality,
@@ -43,6 +46,8 @@ export default function DocumentVerifiedScreen() {
     docType?: string;
     docNumber?: string;
     extractedName?: string;
+    extractedGivenNames?: string;
+    extractedSurname?: string;
     extractedDob?: string;
     matchScore?: string;
     issuingState?: string;
@@ -50,6 +55,7 @@ export default function DocumentVerifiedScreen() {
     dateOfExpiry?: string;
     portraitImageUrl?: string;
   }>();
+  const nameRows = documentNameRows({ extractedName, extractedGivenNames, extractedSurname });
 
   const [frontImageUri, setFrontImageUri] = useState<string | null>(null);
   // Server images (signed, expiring): the portrait, and the scan when this
@@ -154,11 +160,17 @@ export default function DocumentVerifiedScreen() {
               <ScanFace size={24} color={C.ink4} />
             )}
           </View>
-          <View style={{ flex: 1, gap: 3 }}>
-            <Txt v="micro">Full name</Txt>
-            <Txt v="bodyStrong" lines={2}>
-              {extractedName || '—'}
-            </Txt>
+          {/* Regula's own given-name and surname fields, or the name as
+              printed (documentName.ts): never the printed name split by position. */}
+          <View style={{ flex: 1, gap: 8 }}>
+            {(nameRows.length > 0 ? nameRows : [{ key: 'printed', title: 'Name on document', value: '—' }]).map((row) => (
+              <View key={row.key} style={{ gap: 3 }}>
+                <Txt v="micro">{row.title}</Txt>
+                <Txt v="bodyStrong" lines={2}>
+                  {row.value}
+                </Txt>
+              </View>
+            ))}
           </View>
         </View>
         <ListRow title="Document no." value={docNumber || '—'} chevron={false} />

@@ -37,6 +37,7 @@ import {
 } from '@/components/ui';
 import { alpha, useThemeTokens } from '@/theme';
 import { iconSize } from '@/theme/tokens';
+import type { LivenessFailure } from '@/features/liveness/regulaLiveness';
 import type { LivenessChallenge } from '@/types/domain';
 
 /* Scan target is a square region sized like the design repo's liveness
@@ -378,6 +379,8 @@ export interface LivenessResultStageProps {
   score?: number | null;
   /** Real failure detail (toApiError message) under the design copy. */
   error?: string | null;
+  /** How a failed check ended: picks the heading (cancelled, timed out, …). */
+  failure?: LivenessFailure | null;
   primaryLabel: string;
   primaryLoading?: boolean;
   primaryDisabled?: boolean;

@@ -87,6 +87,10 @@ export interface IdentityDocument {
    *  These mirror Facepe's VerifiedDocument schema and are populated by the
    *  backend's document verification flow. See BUG_REPORT_BACKEND_EXTRACTED_DATA.md */
   extractedName?: string | null;
+  /** Regula's own given-name and surname fields, when it read them; never
+   *  split out of extractedName (which keeps the document's order). */
+  extractedGivenNames?: string | null;
+  extractedSurname?: string | null;
   extractedDob?: string | null;
   nationality?: string | null;
   issuingState?: string | null;
@@ -773,6 +777,8 @@ export type DocumentReasonCode =
   | 'FACE_NOT_ENROLLED'
   | 'DOCUMENT_FACE_MISMATCH'
   | 'PROFILE_MISMATCH'
+  | 'NAME_REVIEW_REQUIRED'
+  | 'DOCUMENT_EXPIRED'
   | 'DOCUMENT_CHECKS_INCONCLUSIVE';
 
 export interface VerificationSession {
@@ -811,6 +817,9 @@ export interface VerifyDocumentResponse extends VerificationSession {
   matchScore?: number | null;
   /** Name extracted from the document by Regula (may differ from profile). */
   extractedName?: string | null;
+  /** Regula's separate given-name and surname fields, when it read them. */
+  extractedGivenNames?: string | null;
+  extractedSurname?: string | null;
   /** Date of birth extracted from the document (ISO yyyy-mm-dd). */
   extractedDob?: string | null;
   /** Document number extracted by Regula. */

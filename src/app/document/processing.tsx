@@ -8,7 +8,7 @@ import { View } from 'react-native';
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
 import { documentKeys, refreshAfterVerify, useAddDocument } from '@/features/documents/hooks';
-import { isExpired, namesMatch } from '@/features/documents/identityChecks';
+import { alreadyVerified, mayDiscard, rejectKind, type RejectKind } from '@/features/documents/verifyOutcome';
 import { errorFields, startDocLog } from '@/features/documents/verifyLog';
 import { isApproved, verifyDocumentWithUploads, type VerifyUploadStep } from '@/features/documents/verifyWithUploads';
 import { DocumentCard, docMeta, ScanHero, StepList, type FlowStepState } from '@/premium/flows/documents';
@@ -18,7 +18,6 @@ import { Button, Heading, Row, Screen, TopBar, Txt } from '@/premium/ui';
 import { clearDocumentImages, saveDocumentImages } from '@/services/documentImageStore';
 import { flowGuards } from '@/services/flowGuards';
 import { clearScanResult, getScanResult } from '@/services/scanStore';
-import { useAppSelector } from '@/store';
 import type { DocumentType, IdentityDocument } from '@/types/domain';
 
 type ProcessingStatus = 'adding' | 'uploading' | 'verifying' | 'done' | 'error';
@@ -46,11 +45,7 @@ const STATUS_LINE: Record<ProcessingStatus, string> = {
   error: 'Verification failed',
 };
 
-/** Rejections shown as a popup: expired (app check), someone else's face
- *  (DOCUMENT_FACE_MISMATCH), name differs (app check, or the server's
- *  PROFILE_MISMATCH, which also covers date of birth). */
-type RejectKind = 'expired' | 'face' | 'name' | 'profile';
-
+/** Rejections shown as a popup, by the server's reasonCode (verifyOutcome). */
 const REJECT_COPY: Record<RejectKind, { title: string; body: string }> = {
   expired: {
     title: 'This document has expired',
@@ -60,9 +55,9 @@ const REJECT_COPY: Record<RejectKind, { title: string; body: string }> = {
     title: "This document isn't yours",
     body: "The photo on this document doesn't match your face. You can only add your own documents.",
   },
-  name: {
-    title: "Name doesn't match",
-    body: "The name on this document doesn't match the name on your profile. You can only add your own documents.",
+  review: {
+    title: 'Name needs checking',
+    body: "The name on this document is written differently from your profile (for example accents, initials or word order), so it couldn't be confirmed automatically. Your other documents aren't affected. Check the name on your profile, or use another document.",
   },
   profile: {
     title: "Details don't match",
@@ -112,7 +107,6 @@ export default function DocumentProcessingScreen() {
   const activeRef = useRef(true);
   const addDocument = useAddDocument();
   const queryClient = useQueryClient();
-  const profileName = useAppSelector((state) => state.auth.user?.fullName ?? '');
   // Set when the document isn't the holder's — shows the popup.
   const [rejected, setRejected] = useState<RejectKind | null>(null);
   // Hero: the photo the user just captured (read once — the store is cleared
@@ -169,6 +163,7 @@ export default function DocumentProcessingScreen() {
         // Step 1: add the document — metadata only, no number (§6.2).
         // On Retry, reuse the document created by the previous attempt.
         let doc = createdDocRef.current;
+        const reused = !!doc;
         if (!doc) {
           goStep('adding');
           doc = await log.step(
@@ -199,8 +194,13 @@ export default function DocumentProcessingScreen() {
           .filter((d) => d.type === docType && d.id !== doc.id)
           .map((d) => d.id);
 
+        // A Retry after a lost answer: the server may already have approved
+        // this document. Its stored state is the answer then — no re-scan.
+        const stored = reused ? alreadyVerified(await api.getDocument(doc.id).catch(() => null)) : null;
+        if (stored) log.info('already verified on the server', { document: doc.id });
+
         // Steps 2–3: presigned upload → session → verify (no base64).
-        const result = await verifyDocumentWithUploads({
+        const result = stored ?? await verifyDocumentWithUploads({
           documentId: doc.id,
           frontBase64: frontImage,
           backBase64: scanResult?.backImageBase64,
@@ -210,18 +210,9 @@ export default function DocumentProcessingScreen() {
 
         clearScanResult();
 
-        // The server doesn't check expiry, and its name check can pass a
-        // document that clearly isn't the holder's — an approval failing
-        // either is discarded like a rejection.
-        const appCheck: Exclude<RejectKind, 'face'> | null = !isApproved(result)
-          ? null
-          : isExpired(result.dateOfExpiry)
-            ? 'expired'
-            : !namesMatch(profileName, result.extractedName)
-              ? 'name'
-              : null;
-
-        if (isApproved(result) && !appCheck) {
+        // The server's answer is the outcome: it checks expiry and compares
+        // the name itself, and an approval it gave is never undone here.
+        if (isApproved(result)) {
           // One per type (§6.5): the server removed older VERIFIED documents of
           // this type. Unverified leftovers of the same type (earlier failed or
           // pending attempts) are now noise — remove them too (best effort).
@@ -263,6 +254,9 @@ export default function DocumentProcessingScreen() {
               // The POST-VERIFY number (masked, read from the document).
               docNumber: result.document?.number ?? '',
               extractedName: result.extractedName ?? '',
+              // Regula's own given-name and surname fields (documentName.ts).
+              extractedGivenNames: result.extractedGivenNames ?? '',
+              extractedSurname: result.extractedSurname ?? '',
               extractedDob: result.extractedDob ?? '',
               matchScore: result.matchScore != null ? String(result.matchScore) : '',
               issuingState: result.issuingState ?? '',
@@ -290,7 +284,10 @@ export default function DocumentProcessingScreen() {
             log.warn('document not removed', { document: old.id, ...errorFields(e) });
           }
         };
-        await discard(attempt, 'discarded this attempt');
+        // Never one the server holds as verified (a re-scan of a verified
+        // document that failed for glare keeps its approval).
+        if (mayDiscard(result.document?.status)) await discard(attempt, 'discarded this attempt');
+        else log.info('attempt kept: verified on the server', { document: attempt.id });
         try {
           const stale = (await api.getDocuments() ?? []).filter(
             (d) => d.type === docType && d.id !== attempt.id && d.status !== 'verified',
@@ -301,18 +298,12 @@ export default function DocumentProcessingScreen() {
         }
         refreshAfterVerify(queryClient, doc.id);
 
-        // Not the holder's document (expired, someone else's face or name):
-        // a popup here. Other rejections keep their own screen and action.
-        const kind: RejectKind | null =
-          appCheck ??
-          (result.reasonCode === 'DOCUMENT_FACE_MISMATCH'
-            ? 'face'
-            : result.reasonCode === 'PROFILE_MISMATCH'
-              ? 'profile'
-              : null);
+        // Expired, someone else's face, different details, or a name to be
+        // checked: a popup here. Other rejections keep their own screen and action.
+        const kind = rejectKind(result.reasonCode);
 
         log.end('rejected', {
-          reason: appCheck ? `app:${appCheck}` : result.reasonCode,
+          reason: result.reasonCode,
           match: result.matchScore,
           next: kind ? 'popup' : 'rejected',
         });
@@ -359,11 +350,18 @@ export default function DocumentProcessingScreen() {
   const backToDocuments = () => {
     // Discard the unverified document created by this attempt so no pending
     // duplicate is left in the wallet.
+    // Only while the server does not hold it as verified: after a lost answer
+    // it may have been approved, and that approval stays.
     const doc = createdDocRef.current;
     if (doc) {
-      api.removeDocument(doc.id).catch(() => {});
-      clearDocumentImages(doc.id).catch(() => {});
       createdDocRef.current = null;
+      void api.getDocument(doc.id)
+        .then(async (server) => {
+          if (!mayDiscard(server?.status)) return;
+          await api.removeDocument(doc.id);
+          await clearDocumentImages(doc.id);
+        })
+        .catch(() => {});
     }
     // The scan replaced itself with this screen, so back is whatever opened
     // it (type picker, or the document page for a rescan) — not the old capture.

@@ -202,6 +202,10 @@ const ACTION_BY_CODE: Record<DocumentReasonCode, RejectionAction> = {
   DOCUMENT_FACE_MISMATCH: 'anotherDocument',
   DOCUMENT_TYPE_MISMATCH: 'changeType',
   PROFILE_MISMATCH: 'editProfile',
+  // A name the server could not confirm automatically (accents, initials,
+  // word order): nothing to retake, and the document freezes no one.
+  NAME_REVIEW_REQUIRED: 'anotherDocument',
+  DOCUMENT_EXPIRED: 'anotherDocument',
   FACE_NOT_ENROLLED: 'setupFace',
 };
 

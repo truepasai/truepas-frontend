@@ -1,11 +1,12 @@
 /** @jsxImportSource react */
 /**
  * Add family — step 1 of 3: member basics. Continue creates the member
- * (POST /cb/family) and goes FACE FIRST: step 2 is the face (liveness 5+,
- * one photo under 5 — POST /face/enroll), step 3 the document, which the
- * backend then checks against that enrolled face (backend §1.2/§7.1:
- * verifying a photo document for a member without a face is rejected with
- * FACE_NOT_ENROLLED). Leaving the liveness step (5+) before the face is
+ * (POST /cb/family). From 5 it goes FACE FIRST: step 2 is the liveness face
+ * (POST /face/enroll), step 3 the document, which the backend then checks
+ * against that enrolled face (backend §1.2/§7.1: verifying a photo document
+ * for a member without a face is rejected with FACE_NOT_ENROLLED). Under 5
+ * it goes DOCUMENT FIRST: the backend refuses the child's one photo until a
+ * document is verified, and the photo follows from the member page. Leaving the liveness step (5+) before the face is
  * enrolled removes the new member again (useDiscardNewMemberOnLeave).
  * Leaving the under-5 photo step keeps them, face pending — a birth
  * certificate needs no face — and only its "Cancel adding" removes them.
@@ -38,6 +39,7 @@ import {
   useAddFamilyMember,
 } from '@/features/family/hooks';
 import { MAX_MEMBER_AGE, relationshipAgeError, sharesTwinBirthday } from '@/features/family/relationshipAge';
+import { cleanName, nameError } from '@/features/names/nameRules';
 import { DateField, formatDate } from '@/premium/flows/family';
 import { Banner, ConfirmSheet } from '@/premium/kit';
 import { C } from '@/premium/theme';
@@ -81,17 +83,24 @@ export default function AddFamilyScreen() {
   const openFaceStep = (member: FamilyMember, name: string) => {
     const age = Number.isFinite(member.age) ? member.age : ageFromDob(dob);
     const mode = memberCaptureMode(member, ageFromDob(dob));
+    if (mode === 'photo') {
+      // Under 5 the document comes first: the backend refuses the photo until
+      // a document is verified, and the photo follows from the member page.
+      router.replace({ pathname: '/family/add/document', params: { personId: member.id, name: name.split(' ')[0], age: String(age) } });
+      return;
+    }
     router.replace({
-      pathname: mode === 'photo' ? '/family/add/photo-capture' : '/family/add/face-capture',
+      pathname: '/family/add/face-capture',
       params: { personId: member.id, name: name.split(' ')[0], age: String(age), next: 'document', fresh: '1' },
     });
   };
 
   const submit = async (twinDobConfirmed = false) => {
-    const trimmed = fullName.trim();
+    const trimmed = cleanName(fullName);
     const next: typeof errors = {};
-    if (trimmed.length < 2) next.name = 'Name is required';
-    else if (trimmed.length > 100) next.name = 'Name is too long';
+    // The rule customer-account-service applies (any script, initials, apostrophes).
+    const nameProblem = nameError(trimmed);
+    if (nameProblem) next.name = nameProblem;
     if (!dob) next.dob = 'Pick a date of birth';
     else {
       const age = ageFromDob(dob);
@@ -250,8 +259,8 @@ export default function AddFamilyScreen() {
       ) : (
         <Banner
           tone="info"
-          title="Face first, then a document"
-          body="Under 5: one photo. Ages 5–9: liveness, any camera. 10+: liveness, front camera. Their document is then checked against that face."
+          title="Their face and a document"
+          body="Under 5: their document first, then one photo. Ages 5–9: liveness, any camera. 10+: liveness, front camera. From 5, their document is then checked against that face."
         />
       )}
 

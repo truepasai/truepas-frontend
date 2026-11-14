@@ -12,7 +12,6 @@ import {
   SERVER_ACTIVATION_DEADLINE_MS,
   attemptOnRecord,
   canCancelNewMember,
-  canContinueWithoutPhoto,
   confirmEnrollment,
   enrollOnce,
   isUnclearFailure,
@@ -120,6 +119,12 @@ describe('a send that is answered', () => {
   it('a 409 is a conflict when the record cannot be read', async () => {
     const { deps } = server({ send: ALREADY, sendTakes: 100, record: () => down() });
     assert.deepEqual(await enrollOnce(deps, { ref: MINE }), { state: 'conflict' });
+  });
+
+  it("a missing parent's consent is reported as such, never as a face set up elsewhere", async () => {
+    const consentNeeded = { status: 409, code: 'CONFLICT', serverCode: 'GUARDIAN_CONSENT_REQUIRED', message: 'Consent needed.' };
+    const { deps } = server({ send: consentNeeded, sendTakes: 100, record: () => assert.fail('no record read') });
+    assert.deepEqual(await enrollOnce(deps, { ref: MINE }), { state: 'consent_required' });
   });
 
   it('a 409 is this attempt only when the record carries its exact reference', async () => {
@@ -243,16 +248,11 @@ describe('isUnclearFailure', () => {
 
 describe('cancelling Add member from the photo step', () => {
   it('is allowed while nothing is on its way to the server', () => {
-    for (const phase of ['camera', 'preparing', 'review']) assert.equal(canCancelNewMember(phase), true, phase);
+    for (const phase of ['camera', 'capturing', 'checking', 'review', 'failed']) assert.equal(canCancelNewMember(phase), true, phase);
   });
 
   it('is not allowed while a photo may still be stored, or once it is saved', () => {
     for (const phase of ['sending', 'confirming', 'unknown', 'done']) assert.equal(canCancelNewMember(phase), false, phase);
-  });
-
-  it('continuing to the birth certificate follows the same rule', () => {
-    assert.equal(canContinueWithoutPhoto('review'), true);
-    assert.equal(canContinueWithoutPhoto('confirming'), false);
   });
 });
 
@@ -261,14 +261,15 @@ describe('the screen (source guard)', () => {
   // decides when this phone's photo becomes the member's avatar.
   const screen = readFileSync(new URL('../../../premium/flows/familyPhotoCapture.tsx', import.meta.url), 'utf8');
 
-  it('saves the photo as the avatar only in enrolled(), reached only for this attempt or a PIN-gated update', () => {
-    assert.equal((screen.match(/rememberMemberPhoto\(/g) ?? []).length, 1);
-    assert.match(screen, /const enrolled = async \(photo: NormalizedPhoto\) => \{[\s\S]*?await rememberMemberPhoto\(personId!, photo\.uri\);/);
-    const calls = screen.match(/await enrolled\(photo\);/g) ?? [];
+  it('never keeps the enrolment photo as the avatar, on the phone or the server', () => {
+    // It used to become the child's avatar. It is their biometric reference
+    // only now: the server keeps the one encrypted copy.
+    assert.doesNotMatch(screen, /rememberMemberPhoto|useRememberMemberPhoto|uploadProfilePicture|saveMemberFacePhoto/);
+    const calls = screen.match(/await enrolled\(\);/g) ?? [];
     assert.equal(calls.length, 2); // case 'enrolled' and the PUT update's success
-    assert.match(screen, /case 'enrolled':[\s\S]*?await enrolled\(photo\);[\s\S]*?case 'enrolled_elsewhere':/);
+    assert.match(screen, /case 'enrolled':[\s\S]*?await enrolled\(\);[\s\S]*?case 'enrolled_elsewhere':/);
     const elsewhere = screen.slice(screen.indexOf("case 'enrolled_elsewhere':"), screen.indexOf("case 'failed':"));
-    assert.doesNotMatch(elsewhere, /enrolled\(|rememberMemberPhoto/);
+    assert.doesNotMatch(elsewhere, /enrolled\(/);
   });
 
   it('sends the reference with the photo and starts no second attempt while one is unsettled', () => {

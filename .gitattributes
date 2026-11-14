@@ -1,0 +1,2 @@
+# patch-package applies these byte for byte: no CRLF conversion on checkout.
+/patches/*.patch -text

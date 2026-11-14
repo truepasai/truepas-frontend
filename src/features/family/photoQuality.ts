@@ -13,7 +13,10 @@
  *
  * A detector failure is never a silent "no verdict": it keeps its technical
  * reason (`detail`, for logs only) and says which part failed — the file, the
- * detector's creation on this phone, or ML Kit while it ran.
+ * detector's creation on this phone, ML Kit while it ran, or the detector
+ * library's own still-photo defect (`detector_defect`: in 2.0.6 its native
+ * code refused every photo, "Invalid image type"; patches/ fixes it, so an
+ * app still showing it needs updating). None of them is a face verdict.
  *
  * Pure, so it runs under `node --test` (__tests__/photoQuality.test.mjs).
  */
@@ -29,6 +32,7 @@ export type PhotoIssue =
   | 'invalid_image'
   | 'image_unreadable'
   | 'detector_unavailable'
+  | 'detector_defect'
   | 'detector_failed'
   | 'no_face'
   | 'several_faces'
@@ -54,6 +58,8 @@ export function guidanceFor(issue: PhotoIssue, name = 'Their'): string {
       return "The photo couldn't be opened on this phone. Please take another photo.";
     case 'detector_unavailable':
       return "This version of the app can't check photos for a face on this phone. Update the app, then try again.";
+    case 'detector_defect':
+      return "This version of the app can't check the photo for a face. Update the app, then try again.";
     case 'detector_failed':
       return 'The face check on this phone stopped with an error. Please take another photo. If it happens again, close and reopen the app.';
     case 'no_face':
@@ -105,7 +111,16 @@ export function checkPhotoFaces(
  *  Android's IOException family, POSIX errors, and the iOS detector's own
  *  "Invalid image URI" / "Failed to load image …". */
 const FILE_ERROR = /FileNotFound|IOException|No such file|ENOENT|EACCES|Permission denied|Invalid image URI|Failed to load image/i;
+/** The detector library's still-photo defect, by its own messages (Android
+ *  IllegalArgumentException, iOS NSError): its native code couldn't read the
+ *  photo reference the bridge hands it, whatever the photo. */
+const DETECTOR_DEFECT = /Invalid image type\. Expected string or \{ uri \}|Invalid image object: missing 'uri'/;
 const MAX_DETAIL = 300;
+
+/** Whether a detector error (as errorDetail logs it) is the library's known defect. */
+export function isDetectorDefect(detail: string): boolean {
+  return DETECTOR_DEFECT.test(detail);
+}
 
 /** An error as one log-safe line: its name and message, with file paths and URIs removed. */
 export function errorDetail(err: unknown): string {
@@ -146,6 +161,7 @@ export function checkPhoto({ image, fileReadable, detector }: PhotoCheckInput, n
     faces = detector.detectFaces();
   } catch (err) {
     const detail = errorDetail(err);
+    if (isDetectorDefect(detail)) return fail('detector_defect', name, detail);
     return fail(FILE_ERROR.test(detail) ? 'image_unreadable' : 'detector_failed', name, detail);
   }
   if (!Array.isArray(faces)) {
@@ -158,6 +174,11 @@ export function checkPhoto({ image, fileReadable, detector }: PhotoCheckInput, n
  *  Retaking goes back to the camera, which drops that photo and its verdict. */
 export function canSavePhoto(stage: { phase: string; check?: PhotoCheck }): boolean {
   return stage.phase === 'review' && stage.check?.ok === true;
+}
+
+/** A check this app can't run here at all: retaking can't help, updating can. */
+export function needsAppUpdate(check: PhotoCheck): check is Extract<PhotoCheck, { ok: false }> {
+  return !check.ok && (check.issue === 'detector_defect' || check.issue === 'detector_unavailable');
 }
 
 export interface PhotoLogContext {

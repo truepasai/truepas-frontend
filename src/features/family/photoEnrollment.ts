@@ -50,7 +50,9 @@ export type EnrollResult =
   | { state: 'unknown' }
   /** A face was already active before this photo was sent. */
   | { state: 'conflict' }
-  | { state: 'member_gone' };
+  | { state: 'member_gone' }
+  /** The parent's consent is missing or was withdrawn: nothing was saved. */
+  | { state: 'consent_required' };
 
 export interface EnrollDeps {
   /** GET /family/{id} → the member's face; null when they are no longer in
@@ -142,6 +144,8 @@ export async function enrollOnce(deps: EnrollDeps, { ref }: { ref: string }): Pr
     return { state: 'enrolled', recovered: false };
   } catch (err) {
     const error = deps.toError(err);
+    // Before the 409 below: this refusal is not "a face is already set up".
+    if (error.serverCode === 'GUARDIAN_CONSENT_REQUIRED') return { state: 'consent_required' };
     if (error.serverCode === 'FAMILY_MEMBER_NOT_FOUND' || error.status === 404) return { state: 'member_gone' };
     if (error.serverCode === 'FACE_ALREADY_ENROLLED' || error.status === 409) {
       // A conflict — unless the record proves this very attempt's face is active.
@@ -163,8 +167,9 @@ export async function enrollOnce(deps: EnrollDeps, { ref }: { ref: string }): Pr
   }
 }
 
-/** Where the photo step is. Sending/confirming/unknown: a photo may be on its way to the server. */
-export type PhotoStepPhase = 'camera' | 'preparing' | 'review' | 'sending' | 'confirming' | 'unknown' | 'done';
+/** Where the photo step is. Camera to failed: nothing has been sent.
+ *  Sending/confirming/unknown: a photo may be on its way to the server. */
+export type PhotoStepPhase = 'camera' | 'capturing' | 'checking' | 'review' | 'failed' | 'sending' | 'confirming' | 'unknown' | 'done';
 
 /**
  * Deliberately cancelling Add member removes the new profile — but never
@@ -173,8 +178,5 @@ export type PhotoStepPhase = 'camera' | 'preparing' | 'review' | 'sending' | 'co
  * keeps the profile, face pending.
  */
 export function canCancelNewMember(phase: PhotoStepPhase): boolean {
-  return phase === 'camera' || phase === 'preparing' || phase === 'review';
+  return phase === 'camera' || phase === 'capturing' || phase === 'checking' || phase === 'review' || phase === 'failed';
 }
-
-/** Going on to the birth certificate is fine whenever nothing is in flight. */
-export const canContinueWithoutPhoto = canCancelNewMember;

@@ -51,7 +51,7 @@ import { ResultView } from '@/premium/views';
 
 /** Face-scan intro tips (original face-scan POINTS). */
 export const INTRO_TIPS: { icon: LucideIcon; title: string }[] = [
-  { icon: ListChecks, title: 'Follow the on-screen prompts' },
+  { icon: ListChecks, title: 'The photo is taken on its own, then follow the prompts' },
   { icon: Sun, title: 'Hold still in good light' },
   { icon: Timer, title: 'The session expires after a few minutes' },
 ];
@@ -376,6 +376,223 @@ export function PremiumChallengeStage({
   );
 }
 
+/** The two parts of a Regula face check, as one rail: the photo, then liveness. */
+const FLOW_PARTS = ['Face photo', 'Liveness check'] as const;
+
+function FlowRail({ index }: { index: 0 | 1 }) {
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={{ flexDirection: 'row', gap: 6 }}>
+        {FLOW_PARTS.map((label, i) => (
+          <View
+            key={label}
+            style={{ flex: 1, height: 4, borderRadius: 2, backgroundColor: i <= index ? C.sky : 'rgba(255,255,255,0.2)' }}
+          />
+        ))}
+      </View>
+      <Txt v="small" color={WHITE_60}>
+        {`Step ${index + 1} of ${FLOW_PARTS.length} · ${FLOW_PARTS[index]}`}
+      </Txt>
+    </View>
+  );
+}
+
+export interface CaptureStageProps {
+  /** The standing instruction ("Look straight at the camera."). */
+  instruction: string;
+  /** What the camera sees now: a hint, or "Face detected. Please stay still." */
+  message: string;
+  /** Advice for whoever holds the phone. */
+  guidance: string;
+  /** A suitable face is holding still: the ring fills over `progress` (0→1). */
+  holding: boolean;
+  progress: number;
+  /** The photo is being taken, checked or sent. */
+  checking: boolean;
+  expiresIn?: number | null;
+  sessionExpiring?: boolean;
+  camera?: ReactNode;
+  allowBackCamera?: boolean;
+  cameraPosition?: 'front' | 'back';
+  onSwitchCamera?: () => void;
+}
+
+/**
+ * The face photo before Regula liveness: the live camera inside the ring,
+ * which fills while a suitable face holds still and the photo is taken on its
+ * own. Cancel asks first, as the challenge stage does.
+ */
+export function PremiumCaptureStage({
+  instruction,
+  message,
+  guidance,
+  holding,
+  progress,
+  checking,
+  expiresIn,
+  sessionExpiring,
+  camera,
+  allowBackCamera,
+  cameraPosition,
+  onSwitchCamera,
+}: CaptureStageProps) {
+  const router = useRouter();
+  const { width, height } = useWindowDimensions();
+  const [confirming, setConfirming] = useState(false);
+  const ring = Math.round(Math.max(180, Math.min(262, width - 100, height * 0.34)));
+  const ready = holding || checking;
+
+  return (
+    <>
+      <FaceStudio
+        onBack={() => setConfirming(true)}
+        rail={<FlowRail index={0} />}
+        right={
+          allowBackCamera && !checking ? (
+            <IconCircle
+              icon={SwitchCamera}
+              tone="glass"
+              label={cameraPosition === 'front' ? 'Switch to back camera' : 'Switch to front camera'}
+              onPress={onSwitchCamera}
+            />
+          ) : undefined
+        }
+        footer={<Button label="Cancel" tone="glass" size="md" onPress={() => setConfirming(true)} />}>
+        <Heading light center title="Face" accent="photo" sub={instruction} />
+        <View style={{ alignItems: 'center' }}>
+          <FaceRing dark size={ring} mode="scan" progress={checking ? 1 : holding ? Math.max(0.04, progress) : 0.04}>
+            {camera}
+          </FaceRing>
+        </View>
+        <View
+          accessibilityLiveRegion="polite"
+          style={{
+            alignSelf: 'center',
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+            borderRadius: R.full,
+            backgroundColor: ready ? 'rgba(8,182,252,0.18)' : 'rgba(255,255,255,0.06)',
+            borderWidth: 1,
+            borderColor: ready ? 'rgba(8,182,252,0.6)' : 'rgba(255,255,255,0.1)',
+          }}>
+          {checking ? <ActivityIndicator size="small" color={C.sky} /> : holding ? <Check size={14} color={C.skyLight} strokeWidth={3} /> : null}
+          <Text style={{ fontFamily: F.semibold, fontSize: 14, color: ready ? C.white : WHITE_80 }}>{message}</Text>
+        </View>
+        <Txt v="small" color={WHITE_60} center>
+          {guidance}
+        </Txt>
+        {expiresIn != null && sessionExpiring ? (
+          <Txt v="mono" color="#FF8A80" center>
+            Session expires in {Math.floor(expiresIn / 60)}:{String(expiresIn % 60).padStart(2, '0')}
+          </Txt>
+        ) : null}
+      </FaceStudio>
+      <ConfirmSheet
+        visible={confirming}
+        danger
+        title="Discard session?"
+        body="The current verification session will be discarded."
+        confirmLabel="Discard"
+        cancelLabel="Keep scanning"
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => {
+          setConfirming(false);
+          router.back();
+        }}
+      />
+    </>
+  );
+}
+
+/**
+ * Between the photo and the result: Regula's liveness screen opens over this
+ * one (`opening`), and after it closes the server reads its verdict
+ * (`verifying`). The same studio and rail, so Regula reads as step 2.
+ */
+export function PremiumLivenessHandoffStage({
+  phase,
+  child,
+  cameraSlot,
+}: {
+  phase: 'opening' | 'verifying';
+  child?: boolean;
+  cameraSlot?: ReactNode;
+}) {
+  return (
+    <FaceStudio hideBack rail={<FlowRail index={1} />} offscreen={<OffscreenCamera camera={cameraSlot} />}>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 22 }}>
+        <FaceRing dark size={200} mode="scan" photo={false} progress={phase === 'verifying' ? 1 : 0.5} />
+        {phase === 'opening' ? (
+          <Heading
+            light
+            center
+            title="Liveness"
+            accent="check"
+            sub={
+              child
+                ? 'Keep their face in the oval and help them follow the prompts.'
+                : 'Keep your face in the oval and follow the prompts.'
+            }
+          />
+        ) : (
+          <Heading light center title="Verifying" accent="liveness…" sub="Checking the result. Don't close the app." />
+        )}
+        <ActivityIndicator size="large" color={C.sky} accessibilityLabel={phase === 'opening' ? 'Starting the liveness check' : 'Verifying'} />
+      </View>
+    </FaceStudio>
+  );
+}
+
+/** A face screen that can only explain and go back (nothing was started). */
+export function PremiumNoticeStage({ title, accent, sub, onBack }: { title: string; accent: string; sub: string; onBack: () => void }) {
+  return (
+    <FaceStudio onBack={onBack} footer={<Button label="Go back" tone="glass" onPress={onBack} />}>
+      <View style={{ flex: 1, justifyContent: 'center', gap: 22 }}>
+        <View style={{ alignItems: 'center' }}>
+          <FaceRing dark size={190} mode="idle" photo={false} />
+        </View>
+        <Heading light center title={title} accent={accent} sub={sub} />
+      </View>
+    </FaceStudio>
+  );
+}
+
+/** The camera is starting, or couldn't: the studio look instead of a plain screen. */
+export function PremiumCameraStateStage({ state, onBack }: { state: 'loading' | 'unavailable'; onBack: () => void }) {
+  if (state === 'loading') {
+    return (
+      <FaceStudio hideBack>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 22 }}>
+          <FaceRing dark size={190} mode="idle" photo={false} />
+          <ActivityIndicator size="large" color={C.sky} accessibilityLabel="Loading camera" />
+          <Txt v="small" color={WHITE_60} center>
+            Starting the camera…
+          </Txt>
+        </View>
+      </FaceStudio>
+    );
+  }
+  return (
+    <FaceStudio onBack={onBack} footer={<Button label="Go back" tone="glass" onPress={onBack} />}>
+      <View style={{ flex: 1, justifyContent: 'center', gap: 22 }}>
+        <View style={{ alignItems: 'center' }}>
+          <FaceRing dark size={190} mode="error" photo={false} />
+        </View>
+        <Heading
+          light
+          center
+          title="Camera"
+          accent="unavailable"
+          sub="No usable camera was found. It may be busy in another app. Close other apps that use the camera, then try again."
+        />
+      </View>
+    </FaceStudio>
+  );
+}
+
 /** Drop-in for LivenessStages `FinishingStage` — camera stays mounted off-screen. */
 export function PremiumFinishingStage({ cameraSlot }: { cameraSlot?: ReactNode }) {
   return (
@@ -389,12 +606,52 @@ export function PremiumFinishingStage({ cameraSlot }: { cameraSlot?: ReactNode }
   );
 }
 
+/** The failed screen's heading, by how the check ended. Nothing passes on any of them. */
+const FAILED_COPY: Record<NonNullable<LivenessResultStageProps['failure']>, { over: string; title: string; accent: string; sub: string; tips: boolean }> = {
+  cancelled: {
+    over: 'Check cancelled',
+    title: 'Liveness check',
+    accent: 'cancelled.',
+    sub: 'Nothing was saved. Start again when you are ready.',
+    tips: false,
+  },
+  timeout: {
+    over: "Let's try that again",
+    title: 'That took',
+    accent: 'too long.',
+    sub: 'Nothing was saved. Find even light and keep the face inside the circle.',
+    tips: true,
+  },
+  not_verified: {
+    over: "Let's try that again",
+    title: "We couldn't verify",
+    accent: 'liveness.',
+    sub: 'Move to a brighter spot and keep the face inside the oval for the whole check.',
+    tips: true,
+  },
+  unavailable: {
+    over: 'Not available right now',
+    title: 'Liveness check',
+    accent: 'unavailable.',
+    sub: 'Nothing was saved. Please try again later.',
+    tips: false,
+  },
+  error: {
+    over: "Let's try that again",
+    title: "We couldn't verify",
+    accent: 'liveness.',
+    sub: 'Move to a brighter spot and keep the face inside the ring for the whole step.',
+    tips: true,
+  },
+};
+
 /** Drop-in for LivenessStages `LivenessResultStage` (passed / failed). */
 export function PremiumLivenessResultStage({
   outcome,
   personId,
   score,
   error,
+  failure,
   primaryLabel,
   primaryLoading,
   primaryDisabled,
@@ -403,6 +660,7 @@ export function PremiumLivenessResultStage({
   cameraSlot,
 }: LivenessResultStageProps) {
   const passed = outcome === 'passed';
+  const failedCopy = FAILED_COPY[failure ?? 'error'];
   return (
     <View style={{ flex: 1, backgroundColor: C.canvas }}>
       <SafeAreaView edges={['top']} style={{ flex: 1 }}>
@@ -429,13 +687,7 @@ export function PremiumLivenessResultStage({
               }
             />
           ) : (
-            <Heading
-              over="Let's try that again"
-              title="We couldn't verify"
-              accent="liveness."
-              center
-              sub="Move to a brighter spot and keep the face inside the ring for the whole step."
-            />
+            <Heading over={failedCopy.over} title={failedCopy.title} accent={failedCopy.accent} center sub={failedCopy.sub} />
           )}
           {error ? (
             <Txt v="small" center>
@@ -447,7 +699,7 @@ export function PremiumLivenessResultStage({
               <Badge label={`Anti-spoof score · ${score.toFixed(2)}`} tone="neutral" />
             </View>
           )}
-          {!passed && (
+          {!passed && failedCopy.tips && (
             <Group title="Quick tips">
               {RETRY_TIPS.map((t) => (
                 <ListRow key={t.title} icon={t.icon} tone="amber" title={t.title} sub={t.sub} chevron={false} />

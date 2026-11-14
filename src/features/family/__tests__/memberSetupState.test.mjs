@@ -106,7 +106,11 @@ describe('leaving the photo step keeps the new member', () => {
     assert.match(camera, /onConfirm=\{\(\) => void cancelAdding\(\)\}/);
   });
 
-  it('offers the birth certificate from the photo step', () => {
-    assert.match(camera, /prefer: 'birthCertificate'/);
+  it('the photo step offers no way on without the photo; the member page keeps birth certificate first', () => {
+    const code = camera.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    assert.doesNotMatch(code, /Continue without photo|continueWithoutPhoto|prefer: 'birthCertificate'/);
+    const memberPage = readFileSync(new URL('../../../app/family/[id].tsx', import.meta.url), 'utf8');
+    assert.match(memberPage, /const birthCertificateInstead = !!m && offersBirthCertificateInstead\(m, setup\);/);
+    assert.match(memberPage, /pathname: '\/family\/add\/document',\s*params: \{ personId: id, name: first, age: String\(m\.age\), band: m\.ageBand, prefer: 'birthCertificate' \}/);
   });
 });

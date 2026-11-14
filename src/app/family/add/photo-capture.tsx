@@ -1,6 +1,7 @@
 /** @jsxImportSource react */
 import { Redirect, useLocalSearchParams } from 'expo-router';
 
+import { ChildPhotoConsentGate } from '@/features/family/ChildPhotoConsentGate';
 import { useMemberFaceUpdateGate } from '@/features/family/hooks';
 import { CameraUnavailableView, loadFamilyPhotoCapture } from '@/premium/flows/family';
 
@@ -36,5 +37,13 @@ export default function FamilyPhotoCaptureScreen() {
       />
     );
   }
-  return Photo ? <Photo /> : <CameraUnavailableView />;
+  const camera = Photo ? <Photo /> : <CameraUnavailableView />;
+  // The parent's consent comes first; the server refuses the photo without it.
+  return personId ? (
+    <ChildPhotoConsentGate personId={personId} name={name}>
+      {camera}
+    </ChildPhotoConsentGate>
+  ) : (
+    camera
+  );
 }

@@ -37,6 +37,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
 import { documentKeys, useDocuments } from '@/features/documents/hooks';
+import { needsGuardianVerification } from '@/features/family/guardianVerification';
+import { MemberGuardianVerificationRow } from '@/features/family/MemberGuardianVerificationRow';
+import { MemberPhotoConsentRow } from '@/features/family/MemberPhotoConsentRow';
 import {
   familyKeys,
   isTwin,
@@ -191,15 +194,26 @@ export default function FamilyMemberScreen() {
       pathname: '/family/add/set-pin',
       params: { personId: id, name: first, ...(change ? { mode: 'change' } : {}) },
     } as never);
-  const continueSetup = !faceDone ? openFaceStep : !docDone ? openDocumentStep : () => openPinStep();
-  const continueLabel = !faceDone
-    ? isPhoto
-      ? `Take ${first}'s face photo`
-      : `Scan ${first}'s face`
-    : !docDone
-      ? `Add ${first}'s document`
-      : `Set ${first}'s check-in PIN`;
-  const continueIcon = !faceDone ? (isPhoto ? Camera : ScanFace) : !docDone ? FileText : KeyRound;
+  // Under 5 the document comes first: the backend refuses the photo until a
+  // document is verified (and never compares that document with the photo).
+  const documentFirst = isPhoto && !docDone;
+  const continueSetup = documentFirst
+    ? openDocumentStep
+    : !faceDone
+      ? openFaceStep
+      : !docDone
+        ? openDocumentStep
+        : () => openPinStep();
+  const continueLabel = documentFirst
+    ? `Add ${first}'s document`
+    : !faceDone
+      ? isPhoto
+        ? `Take ${first}'s face photo`
+        : `Scan ${first}'s face`
+      : !docDone
+        ? `Add ${first}'s document`
+        : `Set ${first}'s check-in PIN`;
+  const continueIcon = documentFirst ? FileText : !faceDone ? (isPhoto ? Camera : ScanFace) : !docDone ? FileText : KeyRound;
 
   // Extra documents any time — processing sees personId and returns here
   // without re-running face capture.
@@ -483,6 +497,13 @@ export default function FamilyMemberScreen() {
             </Group>
           )}
 
+          {/* ---------- guardian verification (children only) ---------- */}
+          {needsGuardianVerification(m.age) ? (
+            <Group title="Guardian verification">
+              <MemberGuardianVerificationRow personId={id} first={first} />
+            </Group>
+          ) : null}
+
           {/* ---------- permissions (§7.2) ---------- */}
           <Group title="Permissions">
             <ListRow
@@ -500,6 +521,7 @@ export default function FamilyMemberScreen() {
                 />
               }
             />
+            {isPhoto ? <MemberPhotoConsentRow personId={id} first={first} /> : null}
           </Group>
 
           <Button

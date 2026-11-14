@@ -13,6 +13,11 @@
  * certificate is preselected: it is the one document that doesn't need the
  * face. The member stays "Face pending" — not verified, check-in frozen —
  * until the photo is enrolled.
+ *
+ * Under 5 (photo members) the document comes FIRST instead: the backend
+ * refuses their photo until a document is verified, and never compares this
+ * document's portrait with a face, so any type works. The add flow starts
+ * here for them, and the photo follows from the member page.
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
@@ -69,11 +74,12 @@ export default function FamilyDocumentScreen() {
         : OPTIONS_MINOR
       : null;
   const [selectedId, setSelectedId] = useState<DocumentType | null>(null);
-  // No face yet: start on the one document that doesn't need it.
-  const preferBirthCertificate = params.prefer === 'birthCertificate' || (!!member && !faceDone);
+  const photoMember = memberCaptureMode(member, age) === 'photo';
+  // No face yet (5 and over): start on the one document that doesn't need it.
+  // Under 5 every document works before the photo.
+  const preferBirthCertificate = params.prefer === 'birthCertificate' || (!!member && !faceDone && !photoMember);
   const fallback = (preferBirthCertificate ? options?.find((o) => o.id === 'birthCertificate') : undefined) ?? options?.[0];
   const selected = options?.find((o) => o.id === selectedId) ?? fallback ?? null;
-  const photoMember = memberCaptureMode(member, age) === 'photo';
 
   if (!personId) return <Redirect href="/family/add" />;
 
@@ -85,10 +91,12 @@ export default function FamilyDocumentScreen() {
     });
   };
 
+  // Under 5 the photo is the last step (the document is already verified), so
+  // it goes back to the member page rather than to another document.
   const setUpFace = () =>
     router.replace({
-      pathname: memberCaptureMode(member, age) === 'photo' ? '/family/add/photo-capture' : '/family/add/face-capture',
-      params: { personId, name: first, ...(age != null ? { age: String(age) } : {}), next: 'document' },
+      pathname: photoMember ? '/family/add/photo-capture' : '/family/add/face-capture',
+      params: { personId, name: first, ...(age != null ? { age: String(age) } : {}), ...(photoMember ? {} : { next: 'document' }) },
     });
 
   return (
@@ -120,19 +128,28 @@ export default function FamilyDocumentScreen() {
         {faceDone ? <Badge label="Face enrolled" tone="green" icon={ScanFace} /> : null}
       </View>
 
-      {member && !faceDone ? (
+      {member && !faceDone && photoMember ? (
+        // Under 5 the document comes first (the backend refuses the photo
+        // before it) and its portrait is never compared with a face.
         <Banner
-          tone="warning"
-          title={photoMember ? `${first}'s face photo is still pending` : `Set up ${first}'s face first`}
-          body={
-            photoMember
-              ? 'A birth certificate works without it. Passports and other photo IDs are checked against the face, so they need the photo first.'
-              : 'Photo documents are checked against their face. A birth certificate works without it.'
-          }
+          tone="info"
+          title={`${first}'s document comes first`}
+          body={`Any of these documents works. ${first}'s photo is taken once the document is verified.`}
           action={
-            <Button label={photoMember ? 'Take photo' : 'Set up face'} tone="soft" size="sm" full={false} icon={ScanFace} onPress={setUpFace} />
+            member.verification === 'pending_face' ? (
+              <Button label="Take photo" tone="soft" size="sm" full={false} icon={ScanFace} onPress={setUpFace} />
+            ) : undefined
           }
         />
+      ) : member && !faceDone ? (
+        <Banner
+          tone="warning"
+          title={`Set up ${first}'s face first`}
+          body="Photo documents are checked against their face. A birth certificate works without it."
+          action={<Button label="Set up face" tone="soft" size="sm" full={false} icon={ScanFace} onPress={setUpFace} />}
+        />
+      ) : photoMember ? (
+        <Banner tone="info" body={`${first}'s document is checked without comparing faces.`} />
       ) : (
         <Banner tone="info" body={`The photo on ${first}'s document is checked against their face.`} />
       )}

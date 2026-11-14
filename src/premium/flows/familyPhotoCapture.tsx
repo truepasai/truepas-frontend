@@ -7,28 +7,37 @@
  * for the rear camera).
  *
  * The photo, before anything is sent:
- *  1. prepared on the phone (photoNormalize): a real JPEG — an iPhone
+ *  1. taken (photoCaptureMachine): the live face detector — the 5+ camera's —
+ *     guides the adult until exactly one face is suitable, then the photo is
+ *     taken once it has held still for UNDER5_HOLD_MS, or when they tap Take
+ *     photo while such a face is in view. Both go through takePhoto(), one
+ *     photo at a time. Live detection only frames the photo;
+ *  2. prepared on the phone (photoNormalize): a real JPEG — an iPhone
  *     captures HEIC — upright, at most 1600 px, checked byte by byte;
- *  2. checked on that same JPEG, all on the phone (photoQuality): the file
+ *  3. checked on that same JPEG, all on the phone (photoQuality): the file
  *     is readable, ML Kit's still-image detector finds exactly one face, and
  *     it is fully in view and large enough. "Save photo" stays disabled until
  *     it passes, with guidance when it doesn't; a detector failure is logged
- *     with its reason (never the image).
+ *     with its reason (never the image). Saving is always the adult's tap.
  *
  * Sending (photoEnrollment): the member's record is read first (they must
  * have no face yet), then the photo goes up once with its own enrollment
  * reference (enrollmentRef, from the platform's secure UUID). When the answer
  * never comes (timeout, no response, 5xx) nothing is re-sent: the record is
- * read until it shows this attempt's reference (saved — the only case that
- * makes this photo the avatar), a face from any other enrollment (a neutral
+ * read until it shows this attempt's reference (saved), a face from any other enrollment (a neutral
  * "a face is now set up"), still no face after the attempt can no longer be
  * activated (send again), or the deadline passes ("Check again"). A 409 is a
  * conflict unless the record shows this attempt's reference.
  *
+ * The photo is the child's biometric reference only: it is never kept on the
+ * phone or uploaded as their profile picture (that needs its own purpose and
+ * consent). The server keeps the one encrypted copy.
+ *
  * Leaving keeps a new member's profile, face pending: they can add the
- * photo later, or a birth certificate (which needs no face) — "Continue
- * without photo" goes straight there. Only "Cancel adding", confirmed, and
- * never while a photo may still be stored, removes the new member.
+ * photo later, or a birth certificate (which needs no face) from their page.
+ * This screen offers no way on without the photo. Only "Cancel adding",
+ * confirmed, and never while a photo may still be stored, removes the new
+ * member.
  *
  * Statically imports react-native-vision-camera — NEVER import this file from
  * a route. Load it through loadFamilyPhotoCapture() (./family), which falls
@@ -48,12 +57,18 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Baby, Camera as CameraIcon, FileText, KeyRound, RefreshCw, RotateCcw, SwitchCamera, UserX } from 'lucide-react-native';
+import { Baby, Camera as CameraIcon, KeyRound, RefreshCw, RotateCcw, SwitchCamera, UserX } from 'lucide-react-native';
 import { uuid } from 'expo-modules-core';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, StyleSheet, View } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission, usePhotoOutput, type CameraRef } from 'react-native-vision-camera';
-import { createImageFaceDetector, type ImageFaceDetector } from 'react-native-vision-camera-face-detector';
+import {
+  createFaceDetectorOutput,
+  createImageFaceDetector,
+  type Face,
+  type ImageFaceDetector,
+} from 'react-native-vision-camera-face-detector';
+import { runOnJS } from 'react-native-worklets';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
@@ -64,15 +79,22 @@ import {
   PHOTO_ENROLLMENT_UNDER_AGE,
   familyKeys,
   useRefreshAfterFaceChange,
-  useRememberMemberPhoto,
   useRemoveFamilyMember,
 } from '@/features/family/hooks';
 import { newEnrollmentRef } from '@/features/family/enrollmentRef';
 import {
+  type CaptureTrigger,
+  type LiveView,
+  PHOTO_CAPTURE_COPY,
+  createPhotoCaptureMachine,
+  liveGuidance,
+  liveMessage,
+  toFaceSample,
+} from '@/features/family/photoCaptureMachine';
+import {
   type EnrollResult,
   type PhotoStepPhase,
   canCancelNewMember,
-  canContinueWithoutPhoto,
   confirmEnrollment,
   enrollOnce,
   isUnclearFailure,
@@ -86,27 +108,32 @@ import {
   canSavePhoto,
   checkPhoto,
   errorDetail,
+  needsAppUpdate,
   photoCheckLog,
 } from '@/features/family/photoQuality';
+import { CAPTURE_TIP_AFTER_MS, createStableFaceCapture, type FaceSample } from '@/features/liveness/faceCapture';
 import { hasReauthToken } from '@/services/reauth';
 import type { MemberFaceStatus } from '@/types/domain';
 
 import { FaceRing } from '../blocks';
 import { Banner, ConfirmSheet } from '../kit';
 import { C } from '../theme';
-import { Button, IconCircle, Row } from '../ui';
+import { Button, IconCircle, Row, Txt } from '../ui';
 import { GlassPill, NightStage } from './family';
 
 /** Accurate mode, face boxes only; faces under 10% of the width aren't reported. */
 const DETECTOR_OPTIONS = { performanceMode: 'accurate', minFaceSize: DETECTOR_MIN_FACE } as const;
-/** The one instruction on this screen: the photo is only checked for a single, visible face. */
-const CLEAR_FACE = "Make sure the child's face is clearly visible.";
 const PLATFORM = `${Platform.OS} ${Platform.Version}`;
+/** Live frames handled per second at most (~10, as the 5+ camera). */
+const FRAME_INTERVAL_MS = 100;
 
 type Stage =
   | { phase: 'camera' }
-  | { phase: 'preparing' }
+  | { phase: 'capturing' }
+  | { phase: 'checking' }
   | { phase: 'review'; photo: NormalizedPhoto; check: PhotoCheck }
+  /** No photo to review: `retry` when trying again can help. */
+  | { phase: 'failed'; title: string; body: string; retry: boolean }
   | { phase: 'sending'; photo: NormalizedPhoto }
   | { phase: 'confirming'; photo: NormalizedPhoto }
   | { phase: 'unknown'; photo: NormalizedPhoto }
@@ -172,7 +199,6 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
   const enrollFace = useEnrollFace();
   const updateFace = useUpdateFace();
   const removeMember = useRemoveFamilyMember();
-  const rememberMemberPhoto = useRememberMemberPhoto();
   const refreshAfterFaceChange = useRefreshAfterFaceChange();
   const [stage, setStage] = useState<Stage>({ phase: 'camera' });
   const [notice, setNotice] = useState<Notice>(null);
@@ -213,6 +239,90 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
     setStage(nextStage);
     setNotice(nextNotice);
   };
+  // Read by camera and frame callbacks, which outlive a render.
+  const phaseRef = useRef(phase);
+  useEffect(() => {
+    phaseRef.current = phase;
+  });
+
+  // What the live camera sees, and the one capture (photoCaptureMachine).
+  const [machine] = useState(() => createPhotoCaptureMachine(createStableFaceCapture));
+  const [live, setLive] = useState<LiveView>(() => machine.view());
+  const [tip, setTip] = useState(false);
+  const lookingSince = useRef(0);
+  useEffect(() => {
+    lookingSince.current = Date.now();
+  }, []);
+
+  // Live frames as the 5+ camera takes them (LivenessCamera): the detector
+  // output's callback turns Nitro faces into plain samples and hands them to
+  // JS through a runOnJS wrapper created once, which calls the latest handler
+  // through a ref.
+  const onFramesRef = useRef<(samples: FaceSample[]) => void>(() => {});
+  /* eslint-disable react-hooks/refs -- created once via lazy state init; the
+     runOnJS wrapper reads the latest handler through the ref when frames
+     arrive (it only runs on face events, never during render). */
+  const [onFramesJS] = useState(() =>
+    runOnJS((samples: FaceSample[]) => {
+      onFramesRef.current(samples);
+    }),
+  );
+  /* eslint-enable react-hooks/refs */
+  const lastFrameAt = useRef(0);
+  const handleFaces = useCallback(
+    (faces: Face[]) => {
+      const now = Date.now();
+      if (now - lastFrameAt.current < FRAME_INTERVAL_MS) return;
+      lastFrameAt.current = now;
+      onFramesJS(faces.map(toFaceSample));
+    },
+    [onFramesJS],
+  );
+  /* eslint-disable react-hooks/refs -- the output is created once per camera
+     for the Camera's outputs prop; its callbacks run on native face events and
+     read the throttle ref only then, never during render. */
+  const faceDetectorOutput = useMemo(
+    () =>
+      createFaceDetectorOutput({
+        // Which camera is live: on iOS it picks the frame orientation.
+        cameraFacing: cameraPosition,
+        performanceMode: 'fast',
+        runClassifications: true,
+        runLandmarks: false,
+        onFacesDetected: handleFaces,
+        onError: (error) => {
+          console.warn('[FaceCapture] live face detection error:', errorDetail(error));
+        },
+      }),
+    [handleFaces, cameraPosition],
+  );
+  /* eslint-enable react-hooks/refs */
+
+  // A hold whose frames stopped coming is over; a tip once it takes long.
+  useEffect(() => {
+    if (phase !== 'camera') return;
+    const timer = setInterval(() => {
+      setLive(machine.tick(Date.now()));
+      setTip(Date.now() - lookingSince.current >= CAPTURE_TIP_AFTER_MS);
+    }, 250);
+    return () => clearInterval(timer);
+  }, [phase, machine]);
+
+  /** Look for the face again: any photo is dropped and the hold starts from zero. */
+  const backToCamera = () => {
+    setLive(machine.reset(Date.now()));
+    lookingSince.current = Date.now();
+    setTip(false);
+    show({ phase: 'camera' });
+  };
+
+  const cameraFailed = (error: Error) => {
+    console.warn('[FaceCapture] camera error:', errorDetail(error));
+    if (phaseRef.current === 'camera' || phaseRef.current === 'capturing') {
+      phaseRef.current = 'failed';
+      show({ phase: 'failed', title: 'The camera stopped', body: PHOTO_CAPTURE_COPY.cameraFailed, retry: true });
+    }
+  };
 
   const goToMemberDetail = () => {
     if (inSetup && personId) {
@@ -232,20 +342,6 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
     } else {
       router.dismissTo('/(tabs)');
     }
-  };
-
-  /** Setup: on to the document step without the photo — a birth certificate needs no face. */
-  const continueWithoutPhoto = () => {
-    if (!personId || !canContinueWithoutPhoto(phase)) return;
-    const docParams = { personId, ...(name ? { name } : {}), ...(age ? { age } : {}), prefer: 'birthCertificate' };
-    void settleCameraThen(() => {
-      if (fresh1) {
-        router.replace({ pathname: '/family/[id]', params: { id: personId } });
-        router.push({ pathname: '/family/add/document', params: docParams });
-      } else {
-        router.replace({ pathname: '/family/add/document', params: docParams });
-      }
-    });
   };
 
   const leave = () => {
@@ -289,11 +385,16 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
       }),
     );
 
-  /** Take the photo, prepare it and check it for one usable face. Nothing is sent. */
-  const capture = async () => {
-    if (phase !== 'camera') return;
+  /**
+   * The one way a photo is taken — when a steady face's hold completes
+   * ('auto'), or by Take photo while exactly one suitable face is in view
+   * ('manual') — then prepared and checked for one usable face. The machine
+   * lets one capture run at a time. Nothing is sent.
+   */
+  const takePhoto = async (trigger: CaptureTrigger) => {
+    if (phaseRef.current !== 'camera') return;
     if (!personId) {
-      setNotice({ tone: 'error', title: 'Photo enrollment failed', body: 'Missing family member reference. Please go back and try again.' });
+      show({ phase: 'failed', title: 'Photo enrollment failed', body: 'Missing family member reference. Please go back and try again.', retry: false });
       return;
     }
     // The 5-minute PIN token can run out while the camera is open.
@@ -301,50 +402,71 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
       backToPin(pinSpent ? 'retry' : 'expired');
       return;
     }
-    show({ phase: 'preparing' });
+    if (!machine.begin(trigger, Date.now())) return;
+    phaseRef.current = 'capturing';
+    show({ phase: 'capturing' });
+    console.log('[FaceCapture] photo taken', `trigger=${trigger} camera=${cameraPosition} mode=${isUpdate ? 'update' : 'enroll'}`);
+    let photo: NormalizedPhoto;
     try {
       const photoFile = await photoOutput.capturePhotoToFile({ flashMode: 'off' }, {});
       if (!photoFile) throw new PhotoNormalizeError('unreadable', 'The camera returned no photo. Please take it again.');
       const rawUri = photoFile.filePath.startsWith('file://') ? photoFile.filePath : `file://${photoFile.filePath}`;
-      const photo = await normalizeEnrollmentPhoto(rawUri);
-      const detector: PhotoCheckInput['detector'] =
-        'detector' in faceDetector
-          ? {
-              detectFaces: () =>
-                faceDetector.detector.detectFaces(photo.uri).map((f) => ({
-                  bounds: f.bounds,
-                  frameWidth: f.frameWidth,
-                  frameHeight: f.frameHeight,
-                })),
-            }
-          : faceDetector;
-      const check = checkPhoto(
-        { image: photo, fileReadable: () => preparedPhotoReadable(photo.uri), detector },
-        name ? first : undefined,
-      );
-      // Sizes, the verdict and a failure's reason only — never the image.
-      const line = photoCheckLog(check, { platform: PLATFORM, image: photo, camera: cameraPosition, mode: isUpdate ? 'update' : 'enroll' });
-      if (check.ok) console.log('[FaceCapture] photo', photo.label, line);
-      else console.warn('[FaceCapture] photo', photo.label, line);
-      show({ phase: 'review', photo, check });
+      show({ phase: 'checking' });
+      photo = await normalizeEnrollmentPhoto(rawUri);
     } catch (err) {
       console.warn(
         '[FaceCapture] photo not prepared',
         `category=${err instanceof PhotoNormalizeError ? `prepare_${err.problem}` : 'capture_failed'}`,
         `error="${errorDetail(err).replace(/"/g, "'")}"`,
-        `platform=${PLATFORM} camera=${cameraPosition} mode=${isUpdate ? 'update' : 'enroll'}`,
+        `platform=${PLATFORM} camera=${cameraPosition} mode=${isUpdate ? 'update' : 'enroll'} trigger=${trigger}`,
       );
-      const body = err instanceof PhotoNormalizeError ? err.message : 'The photo could not be taken. Please try again.';
-      show({ phase: 'camera' }, { tone: 'error', title: 'Take the photo again', body });
+      const body = err instanceof PhotoNormalizeError ? err.message : PHOTO_CAPTURE_COPY.captureFailed;
+      show({ phase: 'failed', title: 'Photo not taken', body, retry: true });
+      return;
     }
+    const detector: PhotoCheckInput['detector'] =
+      'detector' in faceDetector
+        ? {
+            detectFaces: () =>
+              faceDetector.detector.detectFaces(photo.uri).map((f) => ({
+                bounds: f.bounds,
+                frameWidth: f.frameWidth,
+                frameHeight: f.frameHeight,
+              })),
+          }
+        : faceDetector;
+    const check = checkPhoto(
+      { image: photo, fileReadable: () => preparedPhotoReadable(photo.uri), detector },
+      name ? first : undefined,
+    );
+    // Sizes, the verdict and a failure's reason only — never the image.
+    const line = photoCheckLog(check, { platform: PLATFORM, image: photo, camera: cameraPosition, mode: isUpdate ? 'update' : 'enroll' });
+    if (check.ok) console.log('[FaceCapture] photo', photo.label, line);
+    else console.warn('[FaceCapture] photo', photo.label, line);
+    // This app can't check photos here at all: retaking can't help.
+    if (needsAppUpdate(check)) {
+      show({ phase: 'failed', title: 'Update the app', body: check.guidance, retry: false });
+      return;
+    }
+    show({ phase: 'review', photo, check });
   };
 
-  const retake = () => show({ phase: 'camera' });
+  // Each live frame, while the camera looks for the face; a completed hold takes the photo.
+  useEffect(() => {
+    onFramesRef.current = (samples) => {
+      if (phaseRef.current !== 'camera') return;
+      const { view, capture } = machine.frames(samples, Date.now());
+      setLive(view);
+      if (capture) void takePhoto('auto');
+    };
+  });
 
-  const enrolled = async (photo: NormalizedPhoto) => {
+  const retake = backToCamera;
+
+  const enrolled = async () => {
     onEnrolled?.();
     show({ phase: 'done' });
-    await rememberMemberPhoto(personId!, photo.uri);
+    // Never the avatar: an enrolment photo is the child's biometric reference only.
     refreshAfterFaceChange();
     // Left while it was saving: the profile updates, but no navigation from a closed screen.
     if (mounted.current) await settleCameraThen(goToMemberDetail);
@@ -357,9 +479,9 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
     if (result.state !== 'unknown') attempt.current = null;
     switch (result.state) {
       case 'enrolled':
-        // This attempt's own face: the only case that saves this photo as the avatar.
+        // This attempt's own face.
         if (result.recovered) void queryClient.invalidateQueries({ queryKey: ['identity'] });
-        await enrolled(photo);
+        await enrolled();
         return;
       case 'enrolled_elsewhere':
         // A face is set up, but not from this photo: say so neutrally, keep
@@ -374,7 +496,7 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
         return;
       case 'failed':
         if (result.retake) {
-          show({ phase: 'camera' }, { tone: 'error', title: 'Take the photo again', body: result.error.message });
+          show({ phase: 'failed', title: 'Take the photo again', body: result.error.message, retry: true });
         } else {
           show({ phase: 'review', photo, check }, { tone: 'error', title: 'Photo not saved', body: result.error.message });
         }
@@ -403,6 +525,11 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
         show({ phase: 'review', photo, check });
         setBlocked({ title: `${first} is no longer on your account`, body: 'Nothing was saved.', action: 'family' });
         return;
+      case 'consent_required':
+        // Withdrawn (or never recorded) while this screen was open: nothing was saved.
+        show({ phase: 'review', photo, check });
+        setBlocked({ title: 'Consent needed', body: `Nothing was saved. Tick the consent box for ${first} before their photo is used.`, action: 'member' });
+        return;
     }
   };
 
@@ -418,7 +545,7 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
       show({ phase: 'sending', photo });
       try {
         await updateFace.mutateAsync({ personId, selfieBase64: photo.base64 });
-        await enrolled(photo);
+        await enrolled();
       } catch (err) {
         const apiErr = toApiError(err);
         if (apiErr.code === 'REAUTH_REQUIRED') {
@@ -506,7 +633,11 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
           icon={SwitchCamera}
           tone="glass"
           label={cameraPosition === 'front' ? 'Switch to back camera' : 'Switch to front camera'}
-          onPress={() => setCameraPosition((p) => (p === 'front' ? 'back' : 'front'))}
+          onPress={() => {
+            // Another camera: the hold so far doesn't count.
+            setLive(machine.reset(Date.now()));
+            setCameraPosition((p) => (p === 'front' ? 'back' : 'front'));
+          }}
         />
       ) : undefined,
   };
@@ -535,7 +666,11 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
 
   const shown = stage.phase === 'review' || stage.phase === 'sending' || stage.phase === 'confirming' || stage.phase === 'unknown' ? stage.photo : null;
   const review = stage.phase === 'review' ? stage : null;
-  const busy = phase === 'preparing' || phase === 'sending' || phase === 'confirming' || phase === 'done';
+  const failed = stage.phase === 'failed' ? stage : null;
+  const taking = phase === 'capturing' || phase === 'checking';
+  const busy = taking || phase === 'sending' || phase === 'confirming' || phase === 'done';
+  const holding = phase === 'camera' && live.status === 'holding';
+  const note = isUpdate ? ' It replaces the current face photo.' : inSetup ? ' Their document comes next.' : '';
 
   const primary = blocked ? (
     <Button label={blocked.action === 'member' ? `Go to ${first}'s page` : 'Go to Family'} onPress={followBlocked} />
@@ -543,13 +678,17 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
     <Button label="Enter PIN again" icon={KeyRound} onPress={() => backToPin('retry')} />
   ) : phase === 'unknown' ? (
     <Button label="Check again" icon={RefreshCw} onPress={() => void checkAgain()} />
-  ) : phase === 'camera' || phase === 'preparing' ? (
+  ) : failed ? (
+    failed.retry ? <Button label="Try again" icon={RotateCcw} onPress={retake} /> : <Button label="Go back" onPress={leave} />
+  ) : phase === 'camera' || taking ? (
     <Button
-      label={phase === 'preparing' ? 'Checking photo…' : 'Take photo'}
+      label={phase === 'capturing' ? 'Taking photo…' : phase === 'checking' ? 'Checking photo…' : 'Take photo'}
       icon={CameraIcon}
-      loading={phase === 'preparing'}
-      disabled={phase === 'preparing'}
-      onPress={() => void capture()}
+      loading={taking}
+      // Only while exactly one suitable face is in view; the capture itself
+      // is claimed through the machine (machine.begin), one at a time.
+      disabled={!holding}
+      onPress={() => void takePhoto('manual')}
     />
   ) : (
     <Button
@@ -567,46 +706,58 @@ export function FamilyPhotoCapture({ onEnrolled }: { onEnrolled?: () => void }) 
       title={name ? `${first}'s` : 'Face'}
       accent={isUpdate ? 'new photo.' : 'photo.'}
       instruction={
-        review && !review.check.ok
-          ? undefined
-          : isUpdate
-            ? `${CLEAR_FACE} It replaces the current face photo.`
-            : inSetup
-              ? `${CLEAR_FACE} Their document comes next.`
-              : CLEAR_FACE
+        phase === 'camera'
+          ? liveMessage(live, name ? first : undefined)
+          : phase === 'capturing'
+            ? PHOTO_CAPTURE_COPY.capturing
+            : phase === 'checking'
+              ? PHOTO_CAPTURE_COPY.checking
+              : review && review.check.ok
+                ? `Save this photo, or retake it.${note}`
+                : undefined
       }
       footer={
         <View style={{ gap: 10 }}>
           {primary}
           {!blocked && review ? <Button label="Retake photo" tone="glass" icon={RotateCcw} onPress={retake} /> : null}
-          {!blocked && inSetup && canContinueWithoutPhoto(phase) ? (
-            <Button label="Continue without photo" tone="glass" icon={FileText} size="md" onPress={continueWithoutPhoto} />
-          ) : null}
           {!blocked && fresh1 && canCancelNewMember(phase) ? (
             <Button label={`Cancel adding ${first}`} tone="glass" icon={UserX} size="sm" onPress={() => setConfirmCancel(true)} />
           ) : null}
         </View>
       }>
       <View style={{ alignItems: 'center' }}>
-        <FaceRing dark size={250} mode={busy ? 'scan' : 'idle'} progress={0.5}>
+        <FaceRing
+          dark
+          size={250}
+          mode={holding || busy ? 'scan' : 'idle'}
+          // Holding: the ring fills as the face stays still.
+          progress={holding && live.status === 'holding' ? Math.max(0.02, live.progress) : 0.5}>
           <Camera
             ref={cameraRef}
             style={StyleSheet.absoluteFill}
             device={device}
-            isActive={cameraActive && (phase === 'camera' || phase === 'preparing')}
-            outputs={[photoOutput]}
+            isActive={cameraActive && (phase === 'camera' || phase === 'capturing')}
+            outputs={[photoOutput, faceDetectorOutput]}
             mirrorMode="auto"
             resizeMode="cover"
             implementationMode="compatible"
+            onStarted={() => setLive(machine.cameraStarted())}
+            onError={cameraFailed}
           />
           {shown ? <Image source={{ uri: shown.uri }} style={StyleSheet.absoluteFill} contentFit="cover" accessibilityLabel={`${first}'s photo`} /> : null}
         </FaceRing>
       </View>
+      {phase === 'camera' ? (
+        <Txt v="small" center color="rgba(255,255,255,0.72)">
+          {`${liveGuidance(tip)}${note}`}
+        </Txt>
+      ) : null}
       <Row gap={8} style={{ justifyContent: 'center', flexWrap: 'wrap' }}>
         <GlassPill icon={Baby} label={`Under ${PHOTO_ENROLLMENT_UNDER_AGE} · photo`} />
         <GlassPill label={cameraPosition === 'front' ? 'Front camera' : 'Back camera'} active />
       </Row>
       {blocked ? <Banner tone="warning" title={blocked.title} body={blocked.body} /> : null}
+      {!blocked && failed ? <Banner tone="error" title={failed.title} body={failed.body} /> : null}
       {!blocked && review && !review.check.ok ? <Banner tone="warning" title="Retake the photo" body={review.check.guidance} /> : null}
       {!blocked && review?.check.ok && !notice ? <Banner tone="success" title="Face found" body="Save this photo, or retake it." /> : null}
       {!blocked && phase === 'confirming' ? (

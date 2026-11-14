@@ -8,6 +8,7 @@ import { ActivityIndicator, Pressable, View } from 'react-native';
 import { toApiError } from '@/api/errors';
 import { addressLines, useAddress } from '@/features/address/hooks';
 import { useUpdateProfile } from '@/features/auth/mutations';
+import { cleanName, nameError } from '@/features/names/nameRules';
 import { useProfilePicture, useUploadProfilePicture } from '@/features/profile/hooks';
 import { useToast } from '@/hooks/useToast';
 import { DateField } from '@/premium/flows/account';
@@ -50,13 +51,15 @@ export default function EditProfileScreen() {
   // The address has its own endpoint, PIN and screen (/profile/address).
   const savedAddress = useAddress();
 
-  const canSave = !!fullName.trim();
+  // The rule customer-account-service applies; shown once something is typed.
+  const nameProblem = fullName.trim() ? nameError(fullName) : null;
+  const canSave = !!fullName.trim() && !nameProblem;
 
   const handleSave = async () => {
     if (!canSave || updateProfile.isPending) return;
     try {
       await updateProfile.mutateAsync({
-        fullName: fullName.trim(),
+        fullName: cleanName(fullName),
         dateOfBirth: dateOfBirth || undefined,
       });
       toast.show('success', 'Profile updated');
@@ -168,6 +171,7 @@ export default function EditProfileScreen() {
           value={fullName}
           onChangeText={setFullName}
           placeholder="Your full name"
+          error={nameProblem ?? undefined}
           inputProps={{ autoCapitalize: 'words', maxLength: 100, autoComplete: 'name' }}
         />
         <DateField

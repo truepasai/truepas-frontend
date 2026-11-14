@@ -1,6 +1,8 @@
 import { isAxiosError } from 'axios';
 
 import { apiClient, getPreauthToken, getRegistrationToken, setRegistrationToken } from '@/api/client';
+import type { GuardianEvidenceUpload, GuardianVerification } from '@/features/family/guardianVerification';
+import type { PhotoConsentStatus } from '@/features/family/photoConsent';
 import { deviceInfo } from '@/services/deviceInfo';
 import { clearReauthToken, peekReauthToken, setReauthToken, takeReauthToken } from '@/services/reauth';
 import type {
@@ -217,6 +219,40 @@ export const realApi = {
       faceEnrolled: data?.faceEnrolled === true,
       faceEnrollmentRef: typeof data?.faceEnrollmentRef === 'string' ? data.faceEnrollmentRef : null,
     };
+  },
+  /** The parent's photo-enrolment consent for an under-5 child (features/family/photoConsent).
+   *  Never answered from mock data when the call fails (api/fallbackPolicy). */
+  getMemberPhotoConsent: async (id: string): Promise<PhotoConsentStatus> => {
+    const { data } = await apiClient.get<PhotoConsentStatus>(`/family/${id}/photo-consent`);
+    return data;
+  },
+  /** The parent ticked the consent box: `accepted` is always the literal true. */
+  giveMemberPhotoConsent: async (id: string, noticeVersion: string): Promise<PhotoConsentStatus> => {
+    const { data } = await apiClient.post<PhotoConsentStatus>(`/family/${id}/photo-consent`, {
+      accepted: true,
+      noticeVersion,
+    });
+    return data;
+  },
+  /** Withdraw: the server keeps the record and removes the child's photo and face. */
+  withdrawMemberPhotoConsent: async (id: string): Promise<PhotoConsentStatus> => {
+    const { data } = await apiClient.delete<PhotoConsentStatus>(`/family/${id}/photo-consent`);
+    return data;
+  },
+  /** Where the parent's guardianship evidence for this child stands
+   *  (features/family/guardianVerification). Never answered from mock data
+   *  when the call fails (api/fallbackPolicy). */
+  getGuardianVerification: async (id: string): Promise<GuardianVerification> => {
+    const { data } = await apiClient.get<GuardianVerification>(`/family/${id}/guardian-verification`);
+    return data;
+  },
+  /** Submit evidence for review (base64 file). The server checks the file and
+   *  keeps it private; the answer is the new status, at most pending_review. */
+  submitGuardianVerification: async (id: string, upload: GuardianEvidenceUpload): Promise<GuardianVerification> => {
+    const { data } = await apiClient.post<GuardianVerification>(`/family/${id}/guardian-verification`, upload, {
+      timeout: 120000,
+    });
+    return data;
   },
   getFamilyActivity: async (id: string): Promise<ActivityLogItem[]> => {
     const { data } = await apiClient.get<unknown[]>(`/family/${id}/activity`);

@@ -78,12 +78,31 @@ function retryAfterFrom(error: AxiosError): number | undefined {
   return undefined;
 }
 
-/** Normalize a 422 `errors` payload — {field: msg}, {field: [msgs]} or
- *  [{field, message}] — into a flat field→message map. */
+/** A FastAPI validation list ([{loc, msg}], as customer-account-service sends
+ *  for a refused name): its messages without pydantic's "Value error, " prefix. */
+function validationItems(data: unknown): { field?: string; message: string }[] {
+  const record = data as Record<string, unknown> | undefined;
+  const list = Array.isArray(record?.detail) ? record?.detail : Array.isArray(record?.details) ? record?.details : null;
+  if (!list) return [];
+  return (list as unknown[]).flatMap((item) => {
+    const entry = item as Record<string, unknown> | null;
+    if (!entry || typeof entry.msg !== 'string') return [];
+    const loc = Array.isArray(entry.loc) ? entry.loc : [];
+    const last = loc[loc.length - 1];
+    return [{ field: typeof last === 'string' ? last : undefined, message: entry.msg.replace(/^Value error, /, '') }];
+  });
+}
+
+/** Normalize a 422 `errors` payload — {field: msg}, {field: [msgs]},
+ *  [{field, message}] or FastAPI's [{loc, msg}] — into a flat field→message map. */
 function fieldErrorsFrom(data: unknown): Record<string, string> | undefined {
   const errors = (data as Record<string, unknown> | undefined)?.errors
     ?? (data as Record<string, unknown> | undefined)?.field_errors;
-  if (!errors) return undefined;
+  if (!errors) {
+    const out: Record<string, string> = {};
+    for (const item of validationItems(data)) if (item.field && !out[item.field]) out[item.field] = item.message;
+    return Object.keys(out).length ? out : undefined;
+  }
   const out: Record<string, string> = {};
   if (Array.isArray(errors)) {
     for (const e of errors) {
@@ -281,7 +300,7 @@ function baseApiError(error: unknown): ApiError {
     if (status === 422) {
       return {
         code: 'VALIDATION',
-        message: serverMsg ?? 'Please check the highlighted fields and try again.',
+        message: serverMsg ?? validationItems(data)[0]?.message ?? 'Please check the highlighted fields and try again.',
         status,
         retryable: false,
         traceId,

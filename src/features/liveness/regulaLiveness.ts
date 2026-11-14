@@ -1,6 +1,6 @@
 /**
- * Regula liveness on the phone: which liveness check the server runs, and
- * what a Regula Face SDK result may be turned into.
+ * Regula liveness on the phone: which liveness check the server runs, how
+ * the Regula Face SDK is driven, and what its result may be turned into.
  *
  * Regula decides only whether the person is live, and the server decides it,
  * reading the transaction from Regula itself: the phone sends back nothing but
@@ -8,7 +8,8 @@
  * and its image are never used — the face image is the app's own capture,
  * taken before Regula runs.
  *
- * No imports, so it runs under `node --test` (__tests__/regulaLiveness.test.mjs).
+ * No imports (the SDK module is passed in), so it runs under `node --test`
+ * (__tests__/regulaLiveness.test.mjs).
  */
 
 /** The liveness check this server runs: Regula, or the older ML Kit challenge. */
@@ -29,6 +30,31 @@ export const REGULA_DISABLED_CODE = 'REGULA_LIVENESS_DISABLED';
 export function serverUsesChallenge(error: { status: number | null; serverCode?: string }): boolean {
   if (error.serverCode === REGULA_DISABLED_CODE) return error.status === 503;
   return error.status === 404 && error.serverCode === undefined;
+}
+
+/**
+ * Whether a refused Regula session request leads to the ML Kit challenge.
+ * Only when the server runs it (serverUsesChallenge) *and* this build turned
+ * the fallback on (EXPO_PUBLIC_LIVENESS_CHALLENGE_FALLBACK=true). Otherwise
+ * the check fails where the person can see it: the challenge never stands in
+ * for Regula unannounced.
+ */
+export function fallsBackToChallenge(
+  error: { status: number | null; serverCode?: string },
+  challengeFallback: boolean,
+): boolean {
+  return challengeFallback && serverUsesChallenge(error);
+}
+
+/**
+ * Whether the server's answer to `complete` passed this session. The request
+ * succeeding is not enough: the answer must say passed, for this session.
+ */
+export function regulaVerdictPassed(
+  verdict: { success?: unknown; status?: unknown; session_id?: unknown } | null | undefined,
+  sessionId: string,
+): boolean {
+  return verdict?.success === true && verdict.status === 'passed' && verdict.session_id === sessionId;
 }
 
 /** What the SDK needs from the server's session: Regula's URL and this session's tag. */
@@ -85,8 +111,19 @@ export const LIVENESS_ERROR = {
 /** The parts of the SDK's LivenessResponse this app reads. */
 export interface RegulaSdkResponse {
   transactionId?: string | null;
-  error?: { code?: number | null; message?: string | null } | null;
+  error?: {
+    code?: number | null;
+    message?: string | null;
+    /** Regula's service's own reason (LivenessBackendErrorCode). */
+    underlyingError?: { code?: number | null } | null;
+  } | null;
 }
+
+/** LivenessBackendErrorCode values the app words itself (Face SDK 8.4). */
+export const LIVENESS_BACKEND_ERROR = {
+  /** Regula judged the face too young for liveness; it documents no age. */
+  SMALL_AGE: 235,
+} as const;
 
 /** What one Regula run on the phone produced. */
 export type RegulaOutcome =
@@ -106,6 +143,10 @@ export const REGULA_MESSAGES = {
   interrupted: 'The liveness check was interrupted. Keep the app open and try again.',
   failed: "We couldn't complete the liveness check. Please try again.",
   notConfigured: "The liveness check isn't set up correctly. Please try again later.",
+  notOnServer: "The liveness check isn't switched on for this server yet. Please try again later.",
+  notVerified: "We couldn't verify the liveness check. Please try again.",
+  smallAge:
+    "The liveness check couldn't verify this young face. Keep the whole face in the oval, in good light, and try again. If it keeps happening, contact TruePas support.",
 } as const;
 
 const REASONS: Record<number, keyof typeof REGULA_MESSAGES> = {
@@ -137,5 +178,185 @@ export function regulaOutcome(response: RegulaSdkResponse | null | undefined): R
   if (typeof transactionId === 'string' && transactionId.trim()) {
     return { kind: 'transaction', transactionId: transactionId.trim() };
   }
+  if (response?.error?.underlyingError?.code === LIVENESS_BACKEND_ERROR.SMALL_AGE) return regulaFailure('smallAge');
   return regulaFailure((code != null && REASONS[code]) || 'failed');
+}
+
+/** How a failed check ended, for the result screen's heading. */
+export type LivenessFailure = 'cancelled' | 'timeout' | 'not_verified' | 'unavailable' | 'error';
+
+/** A Regula run that produced no transaction, as a failure kind. */
+export function outcomeFailure(outcome: Exclude<RegulaOutcome, { kind: 'transaction' }>): LivenessFailure {
+  if (outcome.kind === 'cancelled') return 'cancelled';
+  if (outcome.reason === 'timeout') return 'timeout';
+  if (outcome.reason === 'smallAge') return 'not_verified';
+  if (outcome.reason === 'unavailable' || outcome.reason === 'notConfigured' || outcome.reason === 'notOnServer') return 'unavailable';
+  return 'error';
+}
+
+/**
+ * A server refusal, as a failure kind: 422 is Regula's verdict read by the
+ * server (not live, wrong tag, not found), 409 a reused or already finished
+ * check; 503 means liveness can't run right now. Anything else is an error.
+ */
+export function serverFailure(error: { status: number | null; serverCode?: string }): LivenessFailure {
+  if (error.status === 422 || (error.status === 409 && error.serverCode === 'REGULA_TRANSACTION_REUSED')) return 'not_verified';
+  if (error.status === 503) return 'unavailable';
+  return 'error';
+}
+
+/** The parts of @regulaforensics/face-sdk the runner uses (a fake in tests). */
+export interface FaceSdkModule {
+  FaceSDK: {
+    instance: {
+      serviceUrl?: string;
+      isInitialized(): Promise<boolean>;
+      initialize(): Promise<[boolean, { code?: number; message?: string } | null]>;
+      startLiveness(options: { config: unknown }): Promise<RegulaSdkResponse | null>;
+      stopLiveness(): void;
+      /** Its setters push each value to the native SDK (regulaAppearance). */
+      customization?: { colors: object };
+      localizationDictionary?: Record<string, string>;
+    };
+  };
+  LivenessConfig: new (options: Record<string, unknown>) => unknown;
+  LivenessType: { ACTIVE: unknown };
+  LivenessSkipStep: { ONBOARDING_STEP: unknown; SUCCESS_STEP: unknown };
+  RecordingProcess: { NOT_UPLOAD: unknown };
+}
+
+/** How long initialization may take (as for the Document Reader). */
+export const REGULA_INIT_TIMEOUT_MS = 20_000;
+/**
+ * How long Regula's screen may stay open. Regula times out its own steps
+ * (PROCESSING_TIMEOUT); this covers a run that never answers at all. It is
+ * well inside the server session's five minutes.
+ */
+export const REGULA_RUN_TIMEOUT_MS = 180_000;
+
+const TIMED_OUT = Symbol('timed out');
+
+function within<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** What a run applies to Regula's screens first (regulaAppearance.regulaAppearance). */
+export interface RunAppearance {
+  colors: Record<string, number | undefined>;
+  strings: Record<string, string>;
+  cameraSwitch: boolean;
+}
+
+/**
+ * Colors and text for Regula's screens, through the SDK's own setters. A
+ * failure here leaves Regula's defaults: it never stops the check.
+ */
+function applyAppearance(
+  sdk: FaceSdkModule['FaceSDK']['instance'],
+  { colors, strings }: RunAppearance,
+  log: (...args: unknown[]) => void,
+): void {
+  try {
+    const target = sdk.customization?.colors as Record<string, number> | undefined;
+    if (target) {
+      for (const [name, value] of Object.entries(colors)) {
+        if (typeof value === 'number') target[name] = value;
+      }
+    }
+    sdk.localizationDictionary = strings;
+  } catch (err) {
+    log('[RegulaLiveness] appearance not applied', (err as Error)?.message);
+  }
+}
+
+/**
+ * A Regula liveness runner over the SDK `load` returns (null when the native
+ * module is not in this build). The SDK is initialized once (Core Basic needs
+ * no license on the phone); a failed initialization is tried again on the
+ * next run. A run resolves, never rejects: a transaction for the server to
+ * verify, a cancellation, or a failure with a message to show.
+ */
+export function createRegulaRunner(
+  load: () => FaceSdkModule | null,
+  timing: { initTimeoutMs?: number; runTimeoutMs?: number } = {},
+  log: (...args: unknown[]) => void = () => {},
+): (config: RegulaRunConfig, appearance?: RunAppearance) => Promise<RegulaOutcome> {
+  const initTimeoutMs = timing.initTimeoutMs ?? REGULA_INIT_TIMEOUT_MS;
+  const runTimeoutMs = timing.runTimeoutMs ?? REGULA_RUN_TIMEOUT_MS;
+  let initPromise: Promise<boolean> | null = null;
+
+  function ensureInitialized(sdk: FaceSdkModule['FaceSDK']['instance']): Promise<boolean> {
+    if (!initPromise) {
+      const attempt = (async () => {
+        if (await sdk.isInitialized()) return true;
+        const [success, error] = await sdk.initialize();
+        if (!success) log('[RegulaLiveness] initialize failed', error?.code, error?.message);
+        return Boolean(success);
+      })().catch((err: unknown) => {
+        log('[RegulaLiveness] initialize threw', (err as Error)?.message);
+        return false;
+      });
+      initPromise = within(attempt, initTimeoutMs).then((result) => {
+        if (result === TIMED_OUT) log('[RegulaLiveness] initialize timed out');
+        const ok = result === true;
+        if (!ok) initPromise = null;
+        return ok;
+      });
+    }
+    return initPromise;
+  }
+
+  return async function runRegulaLiveness({ serviceUrl, tag }: RegulaRunConfig, appearance?: RunAppearance): Promise<RegulaOutcome> {
+    const faceSdk = load();
+    if (!faceSdk) return regulaFailure('unavailable');
+    const sdk = faceSdk.FaceSDK.instance;
+    if (!(await ensureInitialized(sdk))) return regulaFailure('unavailable');
+    const { LivenessConfig, LivenessType, LivenessSkipStep, RecordingProcess } = faceSdk;
+    if (appearance) applyAppearance(sdk, appearance, log);
+    try {
+      sdk.serviceUrl = serviceUrl;
+      const response = await within(
+        sdk.startLiveness({
+          config: new LivenessConfig({
+            // The server's per-session nonce: it accepts only a transaction carrying it.
+            tag,
+            // The mode the server accepts by default (REGULA_ALLOWED_LIVENESS_TYPES=0).
+            livenessType: LivenessType.ACTIVE,
+            // The app has its own instructions and its own result screen, shown
+            // only after the server has verified the transaction.
+            skipStep: [LivenessSkipStep.ONBOARDING_STEP, LivenessSkipStep.SUCCESS_STEP],
+            closeButtonEnabled: true,
+            // The "Powered by Regula" logo at the bottom of Regula's screens:
+            // hidden through the Face SDK's own documented option (default true).
+            copyright: false,
+            // A guardian filming a child may turn to the rear camera, as on the TruePas screen.
+            cameraSwitchEnabled: appearance?.cameraSwitch === true,
+            // No device location, and no session video: only liveness is needed.
+            locationTrackingEnabled: false,
+            recordingProcess: RecordingProcess.NOT_UPLOAD,
+          }),
+        }),
+        runTimeoutMs,
+      );
+      if (response === TIMED_OUT) {
+        log('[RegulaLiveness] no answer in time; closing its screen');
+        try {
+          sdk.stopLiveness();
+        } catch {
+          // Already closed.
+        }
+        return regulaFailure('timeout');
+      }
+      const outcome = regulaOutcome(response);
+      log('[RegulaLiveness] outcome', outcome.kind, outcome.kind === 'failed' ? outcome.reason : '');
+      return outcome;
+    } catch (err) {
+      log('[RegulaLiveness] startLiveness threw', (err as Error)?.message);
+      return regulaFailure('failed');
+    }
+  };
 }
