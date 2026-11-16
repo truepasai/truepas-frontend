@@ -109,6 +109,7 @@ export function validateAddress(input: AddressInput): Partial<Record<AddressFiel
   const city = input.city.trim();
   if (!city) e.city = 'Enter the city.';
   else if (city.length > 100) e.city = 'Use 100 characters or fewer.';
+  else if (!/^\p{L}[\p{L}\s.'-]*$/u.test(city)) e.city = 'Use letters only, like Orlando or Navi Mumbai.';
   const state = input.state.trim();
   if (input.country === 'US') {
     if (!/^[A-Za-z]{2}$/.test(state)) e.state = 'Use the 2-letter state code, like TX or CA.';
