@@ -402,10 +402,14 @@ export function FaceRing({
   photo = true,
   src = "user",
   uri,
+  tick = "bottom",
   children,
 }: {
   size?: number;
   mode?: "scan" | "success" | "error" | "idle";
+  /** Success tick placement: `bottom` overlaps the photo, `corner` pins a
+   *  smaller white-rimmed tick on the ring at 45° (verified-avatar style). */
+  tick?: "bottom" | "corner";
   progress?: number;
   dark?: boolean;
   photo?: boolean;
@@ -423,6 +427,9 @@ export function FaceRing({
   const track = dark ? "rgba(255,255,255,0.12)" : C.line;
   const pulseScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.06] });
   const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.35, 0] });
+  const cornerTick = Math.round(size * 0.22);
+  const cornerOuter = cornerTick + 6;
+  const cornerPos = size / 2 + r * Math.SQRT1_2 - cornerOuter / 2;
 
   return (
     <View style={{ width: size + 60, height: size + 60, alignItems: "center", justifyContent: "center" }}>
@@ -502,9 +509,26 @@ export function FaceRing({
         </View>
         {/* Rounded like the tick: Android draws the box shadow of a square
             wrapper as a square patch behind the circle. */}
-        {mode === "success" && (
+        {mode === "success" && tick === "bottom" && (
           <View style={[{ position: "absolute", bottom: 4, borderRadius: 26 }, SH.sky]}>
             <VerifiedTick size={52} />
+          </View>
+        )}
+        {mode === "success" && tick === "corner" && (
+          <View
+            style={[
+              {
+                position: "absolute",
+                left: cornerPos,
+                top: cornerPos,
+                padding: 3,
+                borderRadius: cornerOuter / 2,
+                backgroundColor: C.white,
+              },
+              SH.sky,
+            ]}
+          >
+            <VerifiedTick size={cornerTick} />
           </View>
         )}
       </View>

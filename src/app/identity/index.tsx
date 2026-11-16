@@ -112,7 +112,7 @@ export default function IdentityScreen() {
                 {verified ? <BadgeCheck size={18} color={C.sky} /> : <Hourglass size={17} color={C.amberInk} />}
                 <Txt v="smallStrong">{verified ? 'Verified by TruePas' : 'Verification in progress'}</Txt>
               </Row>
-              <FaceRing size={176} mode={verified ? 'success' : 'idle'} uri={avatarUri} photo={!!avatarUri}>
+              <FaceRing size={176} mode={verified ? 'success' : 'idle'} tick="corner" uri={avatarUri} photo={!!avatarUri}>
                 {avatarUri ? undefined : (
                   <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.skyWash }}>
                     <Text style={{ fontFamily: F.bold, fontSize: 40, color: C.navy }}>{initials(user?.fullName)}</Text>
