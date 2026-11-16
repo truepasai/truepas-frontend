@@ -36,7 +36,7 @@ import {
 } from 'lucide-react-native';
 import { Fragment, useState } from 'react';
 import { Linking, Platform, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
@@ -146,6 +146,7 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
   // Dark photo header (340, the card overlaps it by 28): light status bar
   // until the canvas scrolls under it.
   const heroStatusBar = useHeroStatusBar(312);
+  const insets = useSafeAreaInsets();
 
   const upcoming = b.status === 'upcoming';
   const editable = isEditableReservation(b);
@@ -263,7 +264,7 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
 
   return (
     <View style={{ flex: 1, backgroundColor: C.canvas }}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }} {...heroStatusBar}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 + insets.bottom }} {...heroStatusBar}>
         {/* ---------- photo header ---------- */}
         <View style={{ height: 340 }}>
           <BookingBackdrop b={b} />
