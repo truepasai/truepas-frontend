@@ -29,6 +29,7 @@ import { api } from '@/api';
 import { toApiError } from '@/api/errors';
 import { useToast } from '@/components/composite/Toast';
 import { documentKeys, refreshAfterVerify, useAddDocument } from '@/features/documents/hooks';
+import { needsRescan } from '@/features/documents/imageUpload';
 import { errorFields, startDocLog, type DocLog } from '@/features/documents/verifyLog';
 import { alreadyVerified, mayDiscard, rejectKind, type RejectKind } from '@/features/documents/verifyOutcome';
 import {
@@ -250,7 +251,11 @@ export default function FamilyProcessingScreen() {
       setRejected(kind);
     } catch (err) {
       const apiErr = toApiError(err);
-      log.end('error', { ...errorFields(err), shown: apiErr.message });
+      // A scan this phone or the server couldn't read: the same photo fails
+      // again, so the way forward is a new scan, not Retry.
+      const rescan = needsRescan(err, apiErr.serverCode);
+      log.end('error', { ...errorFields(err), shown: apiErr.message, rescan: rescan || undefined });
+      if (rescan) setNoScan(true);
       setRetryable(apiErr.retryable);
       setError(apiErr.message || "Couldn't check the document. Please try again.");
       setStatus('error');

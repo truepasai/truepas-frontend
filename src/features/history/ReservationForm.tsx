@@ -48,7 +48,9 @@ import {
   releasesEveryone,
 } from '@/features/history/reservationConsent';
 import {
+  MEMBER_DOCUMENT_NOT_VERIFIED,
   NOTES_MAX,
+  choosable,
   consentRescoped,
   draftFromBooking as draftFrom,
   guestsFor,
@@ -65,6 +67,7 @@ import {
   type ReservationPerson,
   type ReservationSelf,
 } from '@/features/history/reservationDraft';
+import { RESERVATION_EXISTS, SAME_DAY_MESSAGE, sameDayReservation } from '@/features/history/reservationGuests';
 import { DateField } from '@/premium/flows/family';
 import { KIND_META, bookingKind, fmtDay, isoDay } from '@/premium/flows/home';
 import { Banner, Spinner } from '@/premium/kit';
@@ -179,6 +182,8 @@ export function ReservationForm({
   onCreate,
   onUpdate,
   membersUnknown,
+  bookings,
+  onOpenReservation,
 }: {
   mode: 'create' | 'edit';
   initial: ReservationDraft;
@@ -194,12 +199,19 @@ export function ReservationForm({
   /** Editing a booking that never recorded who's going: left as is, nothing
    *  about the people is sent. */
   membersUnknown?: boolean;
+  /** Creating: the customer's bookings, to find a reservation they already
+   *  have with the chosen venue on the chosen days (one per venue and day). */
+  bookings?: Booking[];
+  /** Creating: open that reservation (to add family members there). */
+  onOpenReservation?: (id: string) => void;
 }) {
   const editing = mode === 'edit';
   const [d, setD] = useState<ReservationDraft>(initial);
   const [step, setStep] = useState<Step>(editing ? 'review' : 'venue');
   const [errors, setErrors] = useState<Errors>({});
   const [banner, setBanner] = useState<string | null>(null);
+  // The server refused a second reservation with this venue on these days.
+  const [dayTaken, setDayTaken] = useState(false);
   // Results show once the user types in the venue field, until a pick.
   const [venueTyped, setVenueTyped] = useState(false);
   const venueSearch = useVenueSearch(d.venue, venueTyped && !d.merchantId);
@@ -228,12 +240,14 @@ export function ReservationForm({
 
   const set = <K extends FieldKey>(k: K, v: ReservationDraft[K]) => {
     setD((prev) => ({ ...prev, [k]: v }));
+    if (k === 'checkIn' || k === 'checkOut') setDayTaken(false);
     if (errors[k]) setErrors((prev) => ({ ...prev, [k]: undefined }));
   };
 
   /** Typing searches again and drops any picked venue, and its location. */
   const typeVenue = (t: string) => {
     setD((prev) => ({ ...prev, venue: t, merchantId: null, locationId: null, location: '' }));
+    setDayTaken(false);
     setVenueTyped(true);
     if (errors.venue) setErrors((prev) => ({ ...prev, venue: undefined }));
   };
@@ -241,6 +255,7 @@ export function ReservationForm({
   /** Another venue clears the previous one's location. */
   const pickVenue = (m: MerchantSummary) => {
     if (m.documentAccess) setPickedAccess({ merchantId: m.merchantId, access: m.documentAccess });
+    setDayTaken(false);
     setD((prev) => ({
       ...prev,
       venue: m.businessName,
@@ -288,6 +303,11 @@ export function ReservationForm({
     if (!result || result.ok) return;
 
     const err = toApiError(result.error);
+    if (err.serverCode === RESERVATION_EXISTS) {
+      // Not a field to fix: they already have this reservation (shown below).
+      setDayTaken(true);
+      return;
+    }
     const fieldErrors: Errors = {};
     const loose: string[] = [];
     for (const [k, msg] of Object.entries(err.fieldErrors ?? {})) {
@@ -310,6 +330,10 @@ export function ReservationForm({
       // The venue stopped releasing everyone's documents: re-read its policy.
       setPickedAccess(null);
       void merchant.refetch();
+    } else if (err.serverCode === MEMBER_DOCUMENT_NOT_VERIFIED) {
+      // Someone chosen has no verified ID after all (the list was out of
+      // date): read the family again, so the picker shows it.
+      familyState.retry();
     }
     const failingStep = firstStepWith(fieldErrors);
     if (failingStep) setStep(failingStep);
@@ -323,6 +347,9 @@ export function ReservationForm({
   const heading = step === 'review' && editing ? { ...HEADINGS.review, title: 'Edit your' } : HEADINGS[step];
   const chosenLocation = (locations.data ?? []).find((l) => l.locationId === d.locationId);
   const nobodyRecorded = membersUnknown && d.memberIds.length === 0;
+  // One reservation per venue and day: the one they already have there.
+  const existingId = editing ? null : sameDayReservation(bookings ?? [], d);
+  const sameDay = !editing && (dayTaken || !!existingId) && (step === 'dates' || step === 'review');
 
   const footer =
     step === 'review' ? (
@@ -365,6 +392,18 @@ export function ReservationForm({
       <Heading title={heading.title} accent={heading.accent} sub={heading.sub} />
 
       {banner != null && <Banner tone="error" title={editing ? "Couldn't save changes" : "Couldn't add the reservation"} body={banner} />}
+      {sameDay && (
+        <Banner
+          tone="warning"
+          title="You already have a reservation here"
+          body={SAME_DAY_MESSAGE}
+          action={
+            existingId && onOpenReservation ? (
+              <Button label="Open your reservation" tone="white" size="sm" full={false} onPress={() => onOpenReservation(existingId)} />
+            ) : undefined
+          }
+        />
+      )}
 
       {step === 'venue' && (
         <View style={{ gap: 10 }}>
@@ -423,6 +462,7 @@ export function ReservationForm({
         <PeoplePicker
           people={people}
           selected={d.memberIds}
+          kept={initial.memberIds}
           familyState={familyState}
           selfKnown={!!self}
           error={errors.memberIds}
@@ -767,10 +807,13 @@ function LocationSelect({
 }
 
 /** You and every family member as a checklist; the family list's loading,
- *  failure and emptiness are always shown, never silently hidden. */
+ *  failure and emptiness are always shown, never silently hidden. Someone
+ *  without a verified ID of their own is listed but can't be ticked (saying
+ *  why), unless they are already on the reservation. */
 function PeoplePicker({
   people,
   selected,
+  kept,
   familyState,
   selfKnown,
   error,
@@ -779,6 +822,8 @@ function PeoplePicker({
 }: {
   people: ReservationPerson[];
   selected: string[];
+  /** Already on the reservation: always choosable. */
+  kept: string[];
   familyState: FamilyState;
   selfKnown: boolean;
   error?: string;
@@ -804,15 +849,19 @@ function PeoplePicker({
         <Group>
           {people.map((p) => {
             const on = selected.includes(p.personId);
+            const blocked = !on && !choosable(p, kept);
+            const detail = blocked ? p.notVerified : p.detail;
             return (
               <Pressable
                 key={p.personId}
                 onPress={() => onToggle(p.personId)}
+                disabled={blocked}
                 accessibilityRole="checkbox"
                 aria-checked={on}
-                accessibilityLabel={p.self ? `You, ${p.detail}` : p.detail ? `${p.name}, ${p.detail}` : p.name}
+                aria-disabled={blocked}
+                accessibilityLabel={p.self ? `You, ${detail}` : detail ? `${p.name}, ${detail}` : p.name}
               >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, opacity: blocked ? 0.55 : 1 }}>
                   <View
                     style={{
                       width: 24,
@@ -820,7 +869,7 @@ function PeoplePicker({
                       borderRadius: 7,
                       borderWidth: 2,
                       borderColor: on ? C.sky : C.line,
-                      backgroundColor: on ? C.sky : C.surface,
+                      backgroundColor: on ? C.sky : blocked ? C.sunken : C.surface,
                       alignItems: 'center',
                       justifyContent: 'center',
                     }}
@@ -831,7 +880,7 @@ function PeoplePicker({
                     <Txt v="bodyStrong" color={on ? C.ink : C.ink2}>
                       {p.name}
                     </Txt>
-                    {!!p.detail && <Txt v="small">{p.detail}</Txt>}
+                    {!!detail && <Txt v="small">{detail}</Txt>}
                   </View>
                 </View>
               </Pressable>

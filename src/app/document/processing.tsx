@@ -1,13 +1,14 @@
 /** @jsxImportSource react */
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { RotateCcw, ShieldCheck, TriangleAlert } from 'lucide-react-native';
+import { RotateCcw, ScanLine, ShieldCheck, TriangleAlert } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { View } from 'react-native';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
 import { documentKeys, refreshAfterVerify, useAddDocument } from '@/features/documents/hooks';
+import { needsRescan } from '@/features/documents/imageUpload';
 import { alreadyVerified, mayDiscard, rejectKind, type RejectKind } from '@/features/documents/verifyOutcome';
 import { errorFields, startDocLog } from '@/features/documents/verifyLog';
 import { isApproved, verifyDocumentWithUploads, type VerifyUploadStep } from '@/features/documents/verifyWithUploads';
@@ -94,6 +95,9 @@ export default function DocumentProcessingScreen() {
   const docExpiresAt = expiresAt?.trim() || null;
   const [status, setStatus] = useState<ProcessingStatus>('adding');
   const [error, setError] = useState<string | null>(null);
+  // The scan itself couldn't be read (on this phone or by the server): Retry
+  // would send the same photo, so the way forward is a new scan.
+  const [rescan, setRescan] = useState(false);
   const hasStarted = useRef(false);
   const processRef = useRef<(() => Promise<void>) | null>(null);
   // Document created by the current attempt — reused on Retry so a failed
@@ -329,8 +333,10 @@ export default function DocumentProcessingScreen() {
         // Logged as a warning (Retry is on screen), so it doesn't open the
         // dev error overlay.
         const msg = errorText(err);
-        log.end('error', { ...errorFields(err), shown: msg });
+        const unreadable = needsRescan(err, toApiError(err).serverCode);
+        log.end('error', { ...errorFields(err), shown: msg, rescan: unreadable || undefined });
         if (!stillHere()) return;
+        setRescan(unreadable);
         setError(msg);
         setStatus('error');
       }
@@ -348,32 +354,41 @@ export default function DocumentProcessingScreen() {
   };
 
   const backToDocuments = () => {
-    // Discard the unverified document created by this attempt so no pending
-    // duplicate is left in the wallet.
-    // Only while the server does not hold it as verified: after a lost answer
-    // it may have been approved, and that approval stays.
-    const doc = createdDocRef.current;
-    if (doc) {
-      createdDocRef.current = null;
-      void api.getDocument(doc.id)
-        .then(async (server) => {
-          if (!mayDiscard(server?.status)) return;
-          await api.removeDocument(doc.id);
-          await clearDocumentImages(doc.id);
-        })
-        .catch(() => {});
-    }
+    discardAttempt();
     // The scan replaced itself with this screen, so back is whatever opened
     // it (type picker, or the document page for a rescan) — not the old capture.
     if (router.canGoBack()) router.back();
     else router.replace('/(tabs)/documents' as never);
   };
 
+  // Discard the unverified document created by this attempt so no pending
+  // duplicate is left in the wallet (leaving, or scanning again after an
+  // unreadable scan).
+  // Only while the server does not hold it as verified: after a lost answer
+  // it may have been approved, and that approval stays.
+  function discardAttempt() {
+    const doc = createdDocRef.current;
+    if (!doc) return;
+    createdDocRef.current = null;
+    void api.getDocument(doc.id)
+      .then(async (server) => {
+        if (!mayDiscard(server?.status)) return;
+        await api.removeDocument(doc.id);
+        await clearDocumentImages(doc.id);
+      })
+      .catch(() => {});
+  }
+
   // Popup actions — the attempt is already discarded. The scan replaced
   // itself with this screen, so a fresh one replaces this one.
   const scanAgain = () =>
     router.replace({ pathname: '/document/scan', params: { type: docType, label: docLabel, retake: String(Date.now()) } } as never);
   const toWallet = () => router.dismissTo('/(tabs)/documents' as never);
+  // An unreadable scan: this attempt's document goes, a new scan replaces this screen.
+  const rescanAfterError = () => {
+    discardAttempt();
+    scanAgain();
+  };
 
   const failed = status === 'error';
   // Index-driven steps: before index → done, at index → active (failed on
@@ -390,7 +405,11 @@ export default function DocumentProcessingScreen() {
       footer={
         failed ? (
           <>
-            <Button label="Retry verification" icon={RotateCcw} onPress={retry} />
+            {rescan ? (
+              <Button label="Scan again" icon={ScanLine} onPress={rescanAfterError} />
+            ) : (
+              <Button label="Retry verification" icon={RotateCcw} onPress={retry} />
+            )}
             <Button label="Back to documents" tone="white" onPress={backToDocuments} />
           </>
         ) : undefined
@@ -416,7 +435,12 @@ export default function DocumentProcessingScreen() {
           </Txt>
         </View>
         {failed ? (
-          <Heading title="Verification" accent="failed." sub="Retry with the same scan, or go back to your documents." center />
+          <Heading
+            title="Verification"
+            accent="failed."
+            sub={rescan ? 'Scan the document again, or go back to your documents.' : 'Retry with the same scan, or go back to your documents.'}
+            center
+          />
         ) : (
           <Heading
             title="Checking your"

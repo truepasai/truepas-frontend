@@ -4,16 +4,21 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  CHILD_DOCUMENT_AUTHORIZATION,
+  GUARDIANSHIP_NOT_VERIFIED,
   RESERVATION_DOCUMENT_TERMS,
   TWIN_CONSENT_MESSAGE,
   TWIN_CONSENT_UNAVAILABLE,
   checkInLabel,
   checkInsOn,
+  childConsentTerms,
   consentTerms,
   holderSharing,
+  isChildMember,
   memberSharing,
   personCheckIn,
   releasesEveryone,
+  sharingIntro,
 } from '../reservationConsent.ts';
 
 const TODAY = '2026-10-27';
@@ -106,10 +111,70 @@ describe('document sharing', () => {
     assert.equal(memberSharing(BROTHER, [{ personId: 'someone-else', status: 'granted' }]).shared, false);
   });
 
-  it("a child's documents are never shared and nobody can consent for them", () => {
-    const child = memberSharing(NIECE, [{ personId: NIECE.id, status: 'granted' }]);
-    assert.deepEqual([child.state, child.shared, child.canDecide], ['minor', false, false]);
+  it("a child's document is their parent or guardian's decision, not yet taken", () => {
+    assert.deepEqual(memberSharing(NIECE, []), {
+      state: 'not_decided', label: "You haven't decided — not shared", shared: false, canDecide: true, child: true,
+    });
+    // Nothing is ever decided for them: someone else's decision never counts.
+    assert.equal(memberSharing(NIECE, [{ personId: BROTHER.id, status: 'granted' }]).shared, false);
     assert.equal(memberSharing(undefined, []).canDecide, false);
+  });
+
+  it("only the child's own accepted decision shares their document", () => {
+    const decided = (status) => memberSharing(NIECE, [{ personId: NIECE.id, status }]);
+    assert.deepEqual([decided('granted').shared, decided('granted').label], [true, 'You share their document at their check-in']);
+    for (const status of ['declined', 'withdrawn', 'ended', 'expired']) {
+      assert.deepEqual([decided(status).shared, decided(status).canDecide, decided(status).child], [false, true, true], status);
+    }
+    assert.equal(decided('withdrawn').label, 'You withdrew consent — not shared');
+  });
+
+  it('each child is decided separately', () => {
+    const sibling = { id: 'person-leo', age: 3 };
+    const consents = [{ personId: NIECE.id, status: 'granted' }];
+    assert.equal(memberSharing(NIECE, consents).shared, true);
+    assert.equal(memberSharing(sibling, consents).shared, false);
+  });
+
+  it('a child twin is not asked; an earlier acceptance stays withdrawable', () => {
+    const twin = { id: 'person-tia', age: 7, isTwin: true };
+    assert.deepEqual([memberSharing(twin, []).state, memberSharing(twin, []).canDecide], ['twin', false]);
+    assert.equal(memberSharing(twin, [{ personId: twin.id, status: 'granted' }]).canDecide, true);
+  });
+
+  it('a child is someone known to be under 18', () => {
+    assert.deepEqual([0, 4, 17].map((age) => isChildMember({ age })), [true, true, true]);
+    assert.deepEqual([18, 40, undefined, null, Number.NaN, -1].map((age) => isChildMember({ age })), [false, false, false, false, false, false]);
+    assert.equal(isChildMember(undefined), false);
+    // Of unknown age: nobody decides.
+    assert.deepEqual([memberSharing({ id: 'x' }, []).state, memberSharing({ id: 'x' }, []).canDecide], ['minor', false]);
+  });
+
+  it("the child statement is the approved wording, and the refusal code is customer-account-service's", () => {
+    assert.equal(
+      CHILD_DOCUMENT_AUTHORIZATION,
+      "I authorize TruePas to share my child's verified identity document with the venue for reservation check-in. I understand that the venue will receive the document through the TruePas platform for identity verification and check-in purposes.",
+    );
+    assert.equal(GUARDIANSHIP_NOT_VERIFIED, 'GUARDIANSHIP_NOT_VERIFIED');
+  });
+
+  it("the child terms name the child, the venue and the dates, and cover only the child's own document", () => {
+    const terms = childConsentTerms({ venue: 'Taj Lands End', dates: 'Nov 2 – Nov 4', name: 'Mia' });
+    assert.equal(terms.length, 6);
+    assert.match(terms[0], /^What: Mia's own verified identity document/);
+    assert.match(terms[0], /Never yours or anyone else's in its place/);
+    assert.match(terms[1], /Taj Lands End/);
+    assert.match(terms[2], /only when Mia checks in there on this reservation, between Nov 2 – Nov 4\. Never with anyone else's check-in/);
+    assert.match(terms[4], /each child separately/);
+    assert.match(terms[5], /withdrawn at any time/);
+  });
+
+  it('the sharing section explains the child decision wherever a child is going', () => {
+    assert.match(sharingIntro({ venue: 'V', allPerson: false, anyShared: false, hasChild: true }), /For each child, you decide/);
+    assert.doesNotMatch(sharingIntro({ venue: 'V', allPerson: false, anyShared: false, hasChild: true }), /still in force/);
+    assert.match(sharingIntro({ venue: 'V', allPerson: false, anyShared: true, hasChild: false }), /still in force can be withdrawn/);
+    assert.doesNotMatch(sharingIntro({ venue: 'V', allPerson: true, anyShared: false, hasChild: false }), /child/);
+    assert.match(sharingIntro({ venue: 'V', allPerson: true, anyShared: false, hasChild: true }), /others who consented themselves.*For each child/);
   });
 
   it("a twin can't be asked: a face check can't tell twins apart", () => {
@@ -148,9 +213,11 @@ describe('document sharing', () => {
     assert.match(terms[2], /someone else selected on this reservation checks in there, between Nov 2 – Nov 9/);
     assert.match(terms[3], /face scan/);
     assert.match(terms[4], /Each adult on the reservation decides for themselves/);
+    assert.match(terms[4], /a parent or guardian decides separately for each child/);
+    assert.doesNotMatch(terms.join(' '), /never shared/);
     assert.match(terms[4], /a face scan at the kiosk is never consent/);
     assert.match(terms[5], /withdrawn at any time/);
     assert.match(consentTerms({ venue: 'V', dates: 'D' })[0], /^What: Your own/);
-    assert.equal(RESERVATION_DOCUMENT_TERMS, 'reservation-documents-2026-10');
+    assert.equal(RESERVATION_DOCUMENT_TERMS, 'reservation-documents-2026-11');
   });
 });

@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 
 import { BFF_URL, getAccessToken } from '@/api/client';
+import { trackNative } from '@/api/devNetworkLog';
 
 const keyFor = (userId: string) => `truepas.export.${userId.replace(/[^A-Za-z0-9._-]/g, '_')}`;
 
@@ -115,7 +116,9 @@ export async function downloadExport(path: string): Promise<string | null> {
 
   const { File, Paths } = await import('expo-file-system');
   const target = new File(Paths.document, name);
-  const file = await File.downloadFileAsync(url, target, { headers, idempotent: true });
+  // A native download no fetch/axios hook sees: logged here (development only).
+  const file = await trackNative('GET', url, headers, () => File.downloadFileAsync(url, target, { headers, idempotent: true }),
+    (saved) => ({ savedBytes: saved.size }));
   return file.uri;
 }
 

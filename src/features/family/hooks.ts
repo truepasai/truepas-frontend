@@ -129,6 +129,9 @@ export function useRemoveFamilyMember() {
       for (const docId of before.documentIds) clearDocumentImages(docId).catch(() => {});
       queryClient.removeQueries({ queryKey: memberPhotoKey(id) });
       queryClient.invalidateQueries({ queryKey: familyKeys.all });
+      // They leave the reservations you haven't checked in on (the server
+      // decides); the bookings list shows who's on each.
+      queryClient.invalidateQueries({ queryKey: ['bookings'] });
     },
   });
 }

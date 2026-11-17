@@ -1,8 +1,9 @@
 /**
  * Document verification over presigned uploads (BACKEND_UPDATE_2026-10 §6.2/§6.4).
  *
- *   1. POST /documents/{id}/upload-urls      { parts: front[, back] }
- *   2. PUT each image to its uploadUrl
+ *   0. read and check each image (imageUpload.ts): a real JPEG or PNG, or stop
+ *   1. POST /documents/{id}/upload-urls      { parts: front[, back], contentType }
+ *   2. PUT each image's own bytes to its uploadUrl
  *   3. POST /documents/{id}/verification-sessions { frontObjectKey, backObjectKey, livenessSessionId?, requestId }
  *   4. POST /document-verification-sessions/{sessionId}/verify { sessionToken? }  — no base64
  *
@@ -11,10 +12,10 @@
  * number — the server reads it from the scan).
  */
 import { AxiosError } from 'axios';
-import { EncodingType, File, Paths } from 'expo-file-system';
-import { Platform } from 'react-native';
 
 import { api } from '@/api';
+import { ImageUploadError, prepareImage, uploadImages } from '@/features/documents/imageUpload';
+import { localImageReader } from '@/features/documents/imageUploadNative';
 import { errorFields, imageLabel, startDocLog, type DocLog } from '@/features/documents/verifyLog';
 import type { DocumentImagePart, DocumentReasonCode, VerifyDocumentResponse } from '@/types/domain';
 
@@ -22,9 +23,9 @@ export type VerifyUploadStep = 'uploading' | 'creating_session' | 'verifying';
 
 export interface VerifyDocumentWithUploadsInput {
   documentId: string;
-  /** Front image as a local file URI (file://…). Give this or `frontBase64`. */
+  /** Front image as a local file URI (file://…), read with expo-file-system. Give this or `frontBase64`. */
   frontUri?: string;
-  /** Front image as raw JPEG base64 (no data: prefix) — written to a temp file first. */
+  /** Front image as the scanner's base64 (JPEG or PNG; data: prefix allowed) — uploaded as its decoded bytes. */
   frontBase64?: string;
   /** Optional back image (file URI or base64). */
   backUri?: string;
@@ -44,27 +45,8 @@ export interface VerifyDocumentWithUploadsInput {
   log?: DocLog;
 }
 
-const CONTENT_TYPE = 'image/jpeg';
-
-/** expo-file-system has no web implementation — use data URIs there. */
-const NO_FS = Platform.OS === 'web';
-
 function stripDataUri(data: string): string {
   return data.startsWith('data:') && data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
-}
-
-/** A local URI for an image given as a file URI or base64. Temp files are
- *  collected in `temps` so the caller can delete them afterwards. */
-function toUploadUri(uri: string | undefined, base64: string | undefined, name: string, temps: File[]): string | null {
-  if (uri) return uri;
-  if (!base64) return null;
-  const raw = stripDataUri(base64);
-  if (NO_FS) return `data:${CONTENT_TYPE};base64,${raw}`;
-  const file = new File(Paths.cache, `${name}-${Date.now()}.jpg`);
-  if (!file.exists) file.create({ intermediates: true });
-  file.write(raw, { encoding: EncodingType.Base64 });
-  temps.push(file);
-  return file.uri;
 }
 
 /**
@@ -96,47 +78,40 @@ export async function verifyDocumentWithUploads(input: VerifyDocumentWithUploads
     front: imageLabel(input.frontBase64) ?? (input.frontUri ? 'file' : 'none'),
     back: imageLabel(input.backBase64) ?? (input.backUri ? 'file' : undefined),
   });
-  const temps: File[] = [];
-  let frontObjectKey: string | undefined;
-  let backObjectKey: string | undefined;
+  // Every image is read and checked before anything is sent. A scan that is
+  // no real JPEG or PNG (empty, or an error read back in its place) stops
+  // here: nothing uploaded, no session, and never the inline fallback below.
+  if (!input.frontUri && !input.frontBase64) {
+    throw new ImageUploadError('missing', 'No document image captured. Please scan again.');
+  }
+  const prepared = [await prepareImage({ part: 'front', uri: input.frontUri, base64: input.frontBase64 }, localImageReader, log)];
+  if (input.backUri || input.backBase64) {
+    prepared.push(await prepareImage({ part: 'back', uri: input.backUri, base64: input.backBase64 }, localImageReader, log));
+  }
+
+  let objectKeys: Partial<Record<DocumentImagePart, string>> = {};
   let inline = false;
   let phase: 'urls' | 'put' = 'urls';
+  onStep?.('uploading');
   try {
-    const frontUri = toUploadUri(input.frontUri, input.frontBase64, `doc-${documentId}-front`, temps);
-    if (!frontUri) throw new Error('No document image captured. Please scan again.');
-    const backUri = toUploadUri(input.backUri, input.backBase64, `doc-${documentId}-back`, temps);
-
-    onStep?.('uploading');
-    const files: [DocumentImagePart, string][] = [['front', frontUri]];
-    if (backUri) files.push(['back', backUri]);
-    const { uploads } = await log.step(
-      'upload-urls',
-      () => api.getDocumentUploadUrls(documentId, files.map(([part]) => part), CONTENT_TYPE),
-      (r) => ({ parts: Object.keys(r.uploads ?? {}).join('+') }),
+    objectKeys = await uploadImages(
+      prepared,
+      {
+        getUploadUrls: (parts, contentType) => api.getDocumentUploadUrls(documentId, parts, contentType),
+        put: (uploadUrl, data, contentType) => api.uploadImageBytes(uploadUrl, data, contentType),
+      },
+      log,
+      (step) => {
+        phase = step;
+      },
     );
-    phase = 'put';
-    await Promise.all(
-      files.map(([part, uri]) => {
-        const target = uploads[part];
-        if (!target) throw new Error("Couldn't start the upload. Please try again.");
-        return log.step(`put ${part}`, () => api.uploadFileToUrl(target.uploadUrl, uri, CONTENT_TYPE));
-      }),
-    );
-    frontObjectKey = uploads.front!.objectKey;
-    backObjectKey = backUri ? uploads.back?.objectKey : undefined;
   } catch (err) {
     if (!input.frontBase64 || !presignUnavailable(err, phase)) throw err;
     log.warn('presigned upload unavailable, sending images inline', { phase, ...errorFields(err) });
     inline = true;
-  } finally {
-    for (const f of temps) {
-      try {
-        if (f.exists) f.delete();
-      } catch {
-        // Temp files live in the cache dir — the OS clears them eventually.
-      }
-    }
   }
+  const frontObjectKey = inline ? undefined : objectKeys.front;
+  const backObjectKey = inline ? undefined : objectKeys.back;
 
   onStep?.('creating_session');
   const session = await log.step(

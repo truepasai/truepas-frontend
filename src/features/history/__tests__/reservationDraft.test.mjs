@@ -45,7 +45,7 @@ const reservation = (overrides = {}) => ({
 describe('who can go', () => {
   it('an account with no dependants offers only you, by your person id', () => {
     const people = reservationPeople(SELF, []);
-    assert.deepEqual(people, [{ personId: 'person-self', name: 'You', detail: 'Sarah Kim', self: true }]);
+    assert.deepEqual(people, [{ personId: 'person-self', name: 'You', detail: 'Sarah Kim', self: true, notVerified: null }]);
     assert.ok(!people.some((p) => p.personId === ME.id), 'the account id is never a person');
   });
 

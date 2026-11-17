@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 
+import { installAxiosLogging, installFetchLogging } from '@/api/devNetworkLog';
 import { deviceInfo } from '@/services/deviceInfo';
 import { secureStorage } from '@/services/secureStorage';
 import type { AuthResponse } from '@/types/domain';
@@ -153,6 +154,11 @@ function createClient(baseURL: string): AxiosInstance {
     headers: { 'Content-Type': 'application/json' },
   });
 
+  // Development builds only (devNetworkLog). Registered first: its request
+  // log then runs after the Bearer header below is set, and its response log
+  // sees each answer before a 401 refresh replays the request.
+  installAxiosLogging(instance);
+
   // Public auth endpoints must never carry the user's access token — a stale
   // Bearer token here makes the backend reject the request before it even
   // checks credentials (login → 401 "invalid credentials", verify-otp → 400).
@@ -228,6 +234,13 @@ function createClient(baseURL: string): AxiosInstance {
 
   return instance;
 }
+
+// Development builds only (devNetworkLog): the bare axios that refreshes the
+// access token, and every direct fetch (presigned uploads, Google Places, the
+// web export download, libraries). Each is hooked once, however often this
+// module is evaluated.
+installAxiosLogging(axios);
+installFetchLogging();
 
 // ── Exported client ────────────────────────────────────────────────────
 export const apiClient = createClient(BFF_BASE_URL);

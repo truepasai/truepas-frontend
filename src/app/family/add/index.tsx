@@ -18,6 +18,9 @@
  * family (holder included) is confirmed first: "Check the date" or Continue
  * (the first of twin children has no twin added yet). Once a twin is in
  * the family, a new twin off their birthday is blocked.
+ * Under 5 (by the date of birth picked), the parent's terms and one unticked
+ * box appear under the date; Continue needs the tick (childDocumentConsent.ts:
+ * testing only, nothing is sent). From 5 nothing is shown.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
@@ -27,7 +30,14 @@ import { View } from 'react-native';
 
 import { api } from '@/api';
 import { toApiError } from '@/api/errors';
+import { CheckboxRow } from '@/components/app/CheckboxRow';
 import { useMe } from '@/features/account/hooks';
+import {
+  CHILD_DOCUMENT_CONSENT_MISSING,
+  CHILD_DOCUMENT_CONSENT_TEXT,
+  childDocumentConsentTerms,
+  needsChildDocumentConsent,
+} from '@/features/family/childDocumentConsent';
 import {
   ageFromDob,
   familyKeys,
@@ -43,7 +53,7 @@ import { cleanName, nameError } from '@/features/names/nameRules';
 import { DateField, formatDate } from '@/premium/flows/family';
 import { Banner, ConfirmSheet } from '@/premium/kit';
 import { C } from '@/premium/theme';
-import { Button, Chip, Field, Heading, Row, Screen, Steps, TopBar, Txt } from '@/premium/ui';
+import { Button, Card, Chip, Field, Heading, Row, Screen, Steps, TopBar, Txt } from '@/premium/ui';
 import { useAppSelector } from '@/store';
 import type { FamilyMember } from '@/types/domain';
 
@@ -67,7 +77,10 @@ export default function AddFamilyScreen() {
   const [fullName, setFullName] = useState('');
   const [dob, setDob] = useState('');
   const [relationship, setRelationship] = useState('Child');
-  const [errors, setErrors] = useState<{ name?: string; dob?: string; relationship?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; dob?: string; relationship?: string; consent?: string }>({});
+  // Under 5 only: the parent's tick on the terms before their document.
+  const [childConsent, setChildConsent] = useState(false);
+  const underFive = !!dob && needsChildDocumentConsent(ageFromDob(dob));
   const [checking, setChecking] = useState(false);
   const [existing, setExisting] = useState<FamilyMember | null>(null);
   // Twin whose birthday matches nobody in the family: confirm before adding.
@@ -112,6 +125,7 @@ export default function AddFamilyScreen() {
       }
     }
     if (!relationship) next.relationship = 'Choose a relationship';
+    if (!next.dob && underFive && !childConsent) next.consent = CHILD_DOCUMENT_CONSENT_MISSING;
     setErrors(next);
     setSubmitError(null);
     if (Object.keys(next).length > 0) return;
@@ -253,6 +267,36 @@ export default function AddFamilyScreen() {
           error={errors.dob}
         />
       </View>
+
+      {/* ---------- under 5: the parent's terms before their document ---------- */}
+      {underFive ? (
+        <Card>
+          <View style={{ gap: 12 }}>
+            <Txt v="smallStrong">Parent consent</Txt>
+            {childDocumentConsentTerms(cleanName(fullName).split(' ')[0]).map((term) => (
+              <View key={term.heading} style={{ gap: 4 }}>
+                <Txt v="smallStrong" color={C.ink2}>
+                  {term.heading}
+                </Txt>
+                <Txt v="small">{term.body}</Txt>
+              </View>
+            ))}
+            <CheckboxRow
+              checked={childConsent}
+              onToggle={(value) => {
+                setChildConsent(value);
+                setErrors((e) => ({ ...e, consent: undefined }));
+              }}
+              label={CHILD_DOCUMENT_CONSENT_TEXT}
+            />
+            {errors.consent ? (
+              <Txt v="small" color={C.redInk}>
+                {errors.consent}
+              </Txt>
+            ) : null}
+          </View>
+        </Card>
+      ) : null}
 
       {submitError ? (
         <Banner tone="error" title="Couldn't add member" body={submitError} />

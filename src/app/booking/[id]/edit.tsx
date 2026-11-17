@@ -4,7 +4,9 @@
  * (BACKEND_UPDATE_2026-10 §8.3). Only the customer's own upcoming
  * reservations are editable; a 409 BOOKING_NOT_EDITABLE (it was completed
  * by a kiosk check-in or its dates passed meanwhile) shows a toast,
- * refetches and closes the form.
+ * refetches and closes the form, as does 409 GUEST_REMOVAL_LOCKED (someone
+ * checked in, so nobody can be taken off). A reservation someone has checked
+ * in on offers "Add family members" instead.
  */
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -16,6 +18,8 @@ import { useToast } from '@/components/composite/Toast';
 import { useMe } from '@/features/account/hooks';
 import { useFamily } from '@/features/family/hooks';
 import { historyKeys, isEditableReservation, useBooking, useUpdateReservation } from '@/features/history/hooks';
+import { useIdentitySummary } from '@/features/identity/hooks';
+import { GUEST_REMOVAL_LOCKED, canAddGuests } from '@/features/history/reservationGuests';
 import {
   draftFromBooking,
   familyStateOf,
@@ -34,6 +38,8 @@ export default function EditReservationScreen() {
   const booking = useBooking(id);
   const family = useFamily();
   const me = useMe();
+  // Your own ID's verification (unknown until it loads: the server decides then).
+  const identity = useIdentitySummary();
 
   const b = booking.data;
   // The baseline needs to know who "you" are. Who's going comes from the
@@ -59,19 +65,37 @@ export default function EditReservationScreen() {
   }
 
   if (!isEditableReservation(b)) {
+    const addOnly = canAddGuests(b);
     return (
       <Screen header={<TopBar title="Edit reservation" />}>
         <EmptyView
           icon={CalendarX}
           title="This booking can't be changed"
-          body="Only your own upcoming reservations can be edited."
-          action={<Button label="Back to booking" tone="white" size="sm" full={false} onPress={() => router.back()} />}
+          body={
+            addOnly
+              ? "Someone on this reservation has checked in, so its details can't change. You can still add family members, and take them off until you've checked in yourself."
+              : 'Only your own upcoming reservations can be edited.'
+          }
+          action={
+            addOnly ? (
+              <Button
+                label="Add family members"
+                size="sm"
+                full={false}
+                onPress={() => router.replace({ pathname: '/booking/[id]/add-guests', params: { id: b.id } } as never)}
+              />
+            ) : (
+              <Button label="Back to booking" tone="white" size="sm" full={false} onPress={() => router.back()} />
+            )
+          }
         />
       </Screen>
     );
   }
 
-  const self = me.data?.personId ? { personId: me.data.personId, name: me.data.fullName } : null;
+  const self = me.data?.personId
+    ? { personId: me.data.personId, name: me.data.fullName, documentVerified: identity.data ? identity.data.status === 'verified' : null }
+    : null;
   return <EditForm b={b} family={family.data ?? []} familyState={familyStateOf(family)} self={self} />;
 }
 
@@ -108,7 +132,8 @@ function EditForm({
       close();
       return { ok: true as const };
     } catch (error) {
-      if (toApiError(error).serverCode === 'BOOKING_NOT_EDITABLE') {
+      const code = toApiError(error).serverCode;
+      if (code === 'BOOKING_NOT_EDITABLE' || code === GUEST_REMOVAL_LOCKED) {
         toast({ variant: 'error', title: toApiError(error).message });
         void qc.invalidateQueries({ queryKey: historyKeys.all });
         close();

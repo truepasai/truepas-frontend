@@ -1,6 +1,7 @@
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios';
 
 import { memberCaptureMode } from '@/features/family/memberSetupState';
+import { memberNotVerified } from '@/features/history/reservationDraft';
 import type { GuardianEvidenceUpload, GuardianVerification } from '@/features/family/guardianVerification';
 import type { PhotoConsentStatus } from '@/features/family/photoConsent';
 import { clearReauthToken, peekReauthToken, setReauthToken, takeReauthToken } from '@/services/reauth';
@@ -194,6 +195,16 @@ const endConsents = (bookingId: string, who?: string[]) => {
 };
 const locationProblem = (message: string, code = 'LOCATION_UNAVAILABLE') =>
   failHttp(422, { code, message, errors: { locationId: message } });
+// As customer-account-service: everyone added to a reservation (not already
+// on it) needs their own verified ID; identity-proofing decides there, here
+// your identity summary and each family member's `verification`.
+const notVerifiedProblem = (memberIds: string[] | undefined, already: string[] = []) => {
+  const refused = (memberIds ?? []).filter((id) => !already.includes(id)).filter((id) =>
+    id === user.personId ? identitySummary.status !== 'verified' : memberNotVerified(family.find((m) => m.id === id)?.verification) !== null);
+  if (refused.length === 0) return null;
+  const message = 'Only people whose own ID document has been verified can be added to a reservation.';
+  return failHttp(422, { code: 'MEMBER_DOCUMENT_NOT_VERIFIED', message, errors: { memberIds: message }, personIds: refused });
+};
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 let notifications: Notification[] = [
   { id: 'n1', title: 'Face enrolled', body: 'Your face is set up for check-in.', read: false, createdAt: minutesAgo(30), type: 'identity', data: { type: 'identity' } },
@@ -722,6 +733,19 @@ export const mockApi = {
   },
   removeFamilyMember: (id: string): Promise<OkResponse> => {
     family = family.filter((f) => f.id !== id);
+    // As customer-account-service: they leave the reservations you haven't
+    // checked in on yet; check-ins and the rest of the history stay.
+    const holderIn = (reservationId: string) =>
+      bookings.some(
+        (x) => x.source === 'checkin' && x.status === 'completed' && x.linkedBookingId === reservationId
+          && (!x.checkedInMembers?.length || x.checkedInMembers.includes(user.personId ?? '')),
+      );
+    bookings = bookings.map((b) =>
+      b.source === 'customer' && (b.status === 'upcoming' || b.status === 'completed')
+        && (b.checkedInMembers ?? []).includes(id) && !holderIn(b.id)
+        ? { ...b, checkedInMembers: (b.checkedInMembers ?? []).filter((x) => x !== id) }
+        : b,
+    );
     return respond({ ok: true, message: 'Member removed' });
   },
   updateFamilyPermissions: (personId: string, patch: Partial<NonNullable<FamilyMember['permissions']>>): Promise<FamilyMember> => {
@@ -771,6 +795,19 @@ export const mockApi = {
     if (!b || b.source !== 'customer') return failHttp(404, { message: 'Reservation not found' });
     if (b.status !== 'upcoming') return failHttp(409, { code: 'BOOKING_NOT_EDITABLE', message: 'Only upcoming reservations can be changed' });
     if (personId === user.personId) return consentProblem('USE_RESERVATION_CONSENT', 'The account holder decides on the reservation itself.');
+    const child = family.find((f) => f.id === personId);
+    if (child && child.age < 18 && !payload.livenessSessionId && !payload.sessionToken) {
+      // As customer-account-service: the holder decides for a child only as
+      // their verified guardian, which a mock never verifies. Withdrawing is
+      // always possible.
+      if (!(b.checkedInMembers ?? []).includes(personId)) return consentProblem('CONSENT_NEEDS_SELECTION', 'Select this person on the reservation first.');
+      if (payload.decision !== 'withdrawn') {
+        return failHttp(403, { code: 'GUARDIANSHIP_NOT_VERIFIED', message: "Verify that you're this child's parent or guardian first. Nothing was saved." });
+      }
+      const decided = reservationConsents[bookingId]?.[personId];
+      if (decided?.status === 'granted') decided.status = 'withdrawn';
+      return respond({ personId, status: payload.decision });
+    }
     if (payload.decision === 'granted' && !releasesEveryone(b.merchantId)) {
       return consentProblem('CONSENT_NOT_OFFERED', "This venue doesn't share documents between guests' check-ins.");
     }
@@ -814,6 +851,16 @@ export const mockApi = {
     if (!venue) return fail('Venue is required');
     if (payload.checkIn < todayStr) return fail('Check-in date cannot be in the past');
     if (payload.checkOut && payload.checkOut < payload.checkIn) return fail('Check-out must be on or after check-in');
+    // As customer-account-service: one reservation per venue and day.
+    const lastDay = payload.checkOut || payload.checkIn;
+    if (merchant && bookings.some((x) => x.source === 'customer' && x.merchantId === merchant.merchantId
+      && (x.status === 'upcoming' || x.status === 'completed')
+      && x.checkIn.slice(0, 10) <= lastDay && (x.checkOut || x.checkIn).slice(0, 10) >= payload.checkIn)) {
+      const message = 'You already have a reservation with this venue on these dates. Add family members to that reservation instead of making another one.';
+      return failHttp(409, { code: 'RESERVATION_ALREADY_EXISTS', message, errors: { checkIn: message } });
+    }
+    const unverified = notVerifiedProblem(payload.memberIds);
+    if (unverified) return unverified;
     if (payload.documentReleaseConsent) {
       if (!(payload.memberIds ?? []).includes(user.personId ?? '')) {
         return consentProblem('CONSENT_NEEDS_HOLDER', 'Select yourself to share your own documents.');
@@ -852,6 +899,28 @@ export const mockApi = {
   updateReservation: (id: string, patch: UpdateReservationRequest): Promise<Booking> => {
     const b = bookings.find((x) => x.id === id);
     if (!b) return fail('Booking not found');
+    if (b.source === 'customer' && b.status === 'completed') {
+      // As customer-account-service: after a check-in, only who's on it and
+      // the guest count change, until its dates pass; nobody comes off once
+      // the account holder has checked in on it.
+      const on = b.checkedInMembers ?? [];
+      const others = Object.keys(patch).filter((k) => k !== 'memberIds' && k !== 'guests');
+      if (others.length > 0) {
+        return failHttp(409, { code: 'BOOKING_NOT_EDITABLE', message: 'Once someone has checked in, only family members can be added to this reservation' });
+      }
+      const holderIn = bookings.some(
+        (x) => x.source === 'checkin' && x.status === 'completed' && x.linkedBookingId === id
+          && (!x.checkedInMembers?.length || x.checkedInMembers.includes(user.personId ?? '')),
+      );
+      if (holderIn && ((patch.memberIds && on.some((x) => !patch.memberIds?.includes(x))) || (patch.guests != null && patch.guests < b.guests))) {
+        return failHttp(409, { code: 'GUEST_REMOVAL_LOCKED', message: "You've already checked in on this reservation, so nobody can be removed from it." });
+      }
+      const unverified = notVerifiedProblem(patch.memberIds, on);
+      if (unverified) return unverified;
+      const added: Booking = { ...b, checkedInMembers: patch.memberIds ?? on, guests: patch.guests ?? b.guests };
+      bookings = bookings.map((x) => (x.id === id ? added : x));
+      return respond(added);
+    }
     if (b.source !== 'customer' || b.status !== 'upcoming') return fail("This booking can't be changed any more.");
     const merchant = patch.merchantId ? merchants.find((m) => m.merchantId === patch.merchantId) : undefined;
     if (patch.merchantId && !merchant) return fail("This venue isn't available. Search for it and choose it again.");
@@ -861,6 +930,8 @@ export const mockApi = {
     const site = owner && patch.locationId ? (merchantLocations[owner.merchantId] ?? []).find((l) => l.locationId === patch.locationId) : undefined;
     if (moved && !patch.locationId) return locationProblem('Choose a location for this venue.', 'LOCATION_REQUIRED');
     if (patch.locationId && !site) return locationProblem("This location isn't available. Choose another one.");
+    const unverified = notVerifiedProblem(patch.memberIds, b.checkedInMembers ?? []);
+    if (unverified) return unverified;
     const { memberIds, documentReleaseConsent, ...rest } = patch;
     const updated: Booking = { ...b, ...rest, checkOut: patch.checkOut ?? b.checkOut, notes: patch.notes ?? b.notes };
     if (memberIds) updated.checkedInMembers = memberIds;
@@ -928,6 +999,7 @@ export const mockApi = {
     return respond({ uploads, expiresIn: 900 });
   },
   uploadFileToUrl: (_uploadUrl: string, _fileUri: string, _contentType = 'image/jpeg'): Promise<void> => respond(undefined),
+  uploadImageBytes: (_uploadUrl: string, _bytes: Uint8Array<ArrayBuffer>, _contentType: string): Promise<number> => respond(200),
   getDocumentImages: (_documentId: string): Promise<DocumentImages> =>
     respond({ front: null, back: null, selfie: null, portrait: null }),
 

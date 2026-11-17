@@ -1,6 +1,8 @@
 import { isAxiosError } from 'axios';
 
 import { apiClient, getPreauthToken, getRegistrationToken, setRegistrationToken } from '@/api/client';
+import { putImage, readImageFile, type ImageBytes } from '@/features/documents/imageUpload';
+import { localImageReader } from '@/features/documents/imageUploadNative';
 import type { GuardianEvidenceUpload, GuardianVerification } from '@/features/family/guardianVerification';
 import type { PhotoConsentStatus } from '@/features/family/photoConsent';
 import { deviceInfo } from '@/services/deviceInfo';
@@ -146,17 +148,17 @@ function authFrom(data: Record<string, unknown>): AuthResponse {
   };
 }
 
-/** PUT a local file (file:// or content:// URI, data: URI on web) to a presigned URL. */
+/** PUT a local file (file:// or content:// URI, data: URI on web) to a presigned URL.
+ *  Read with expo-file-system, never fetch(file://), whose 404 for a missing
+ *  file reads like data: a missing, unreadable or empty file stops here and
+ *  nothing is uploaded. No rule on the format: a profile photo is whatever
+ *  the picker returned. */
 async function putFile(uploadUrl: string, fileUri: string, contentType: string): Promise<void> {
   // Send bytes, not a Blob: Expo's fetch replaces Content-Type with a Blob's
   // own type (empty for a local file), and the URL is signed for exactly
   // this Content-Type — anything else is a 403 SignatureDoesNotMatch.
-  const bytes = new Uint8Array(await (await fetch(fileUri)).arrayBuffer());
-  const res = await fetch(uploadUrl, { method: 'PUT', headers: { 'Content-Type': contentType }, body: bytes });
-  if (!res.ok) {
-    const code = (await res.text().catch(() => '')).match(/<Code>([^<]+)<\/Code>/)?.[1];
-    throw new Error(`Upload failed (${res.status}${code ? ` ${code}` : ''})`);
-  }
+  const bytes = await readImageFile(fileUri, localImageReader);
+  await putImage(fetch, uploadUrl, bytes, contentType);
 }
 
 /** Liveness routes take the face sign-in preauth token instead of the
@@ -619,7 +621,9 @@ export const realApi = {
     return Array.isArray(data?.consents) ? data.consents : [];
   },
   /** An adult family member's own decision, verified by their live face.
-   *  403 FACE_NOT_VERIFIED when the face isn't theirs (nothing is saved). */
+   *  403 FACE_NOT_VERIFIED when the face isn't theirs (nothing is saved).
+   *  For a child, sent without a capture: the holder's decision as their
+   *  guardian (403 GUARDIANSHIP_NOT_VERIFIED until that is verified). */
   decideReservationConsent: async (
     bookingId: string,
     personId: string,
@@ -667,6 +671,10 @@ export const realApi = {
   uploadFileToUrl: async (uploadUrl: string, fileUri: string, contentType = 'image/jpeg'): Promise<void> => {
     await putFile(uploadUrl, fileUri, contentType);
   },
+  /** PUT a checked document image's own bytes (imageUpload.ts) to a presigned
+   *  URL from getDocumentUploadUrls, with the type it was signed for. The HTTP status. */
+  uploadImageBytes: async (uploadUrl: string, bytes: ImageBytes, contentType: string): Promise<number> =>
+    putImage(fetch, uploadUrl, bytes, contentType),
   /** Signed, expiring URLs — refetch rather than cache; null parts = placeholder. */
   getDocumentImages: async (documentId: string): Promise<DocumentImages> => {
     const { data } = await apiClient.get<Partial<DocumentImages>>(`/documents/${documentId}/images`);

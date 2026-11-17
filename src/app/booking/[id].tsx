@@ -7,6 +7,11 @@
  *    reservation it completed (linkedBookingId → GET /bookings/{id}).
  *  - the customer's own reservation (source 'customer'): kind, dates,
  *    guests, notes and status; upcoming ones can be edited or deleted.
+ *    Family members can be added until its dates pass, also after someone
+ *    checked in (one reservation per venue and day, so the family goes on
+ *    this one); once anyone on it has checked in, edit/delete give way to
+ *    "Add family members", where family members can still be taken off until
+ *    you (the account holder) have checked in on it (reservationGuests).
  *    "Who's going" lists the people selected, each with their own check-in
  *    status from the kiosk check-ins linked to it (being selected is not
  *    checking in). At a venue that releases everyone's documents, "Document
@@ -31,6 +36,7 @@ import {
   ShieldCheck,
   Timer,
   Trash2,
+  UserPlus,
   Users,
   UsersRound,
 } from 'lucide-react-native';
@@ -55,11 +61,14 @@ import {
   checkInLabel,
   checkInsOn,
   holderSharing,
+  isChildMember,
   memberSharing,
   personCheckIn,
   releasesEveryone,
+  sharingIntro,
   type PersonCheckIn,
 } from '@/features/history/reservationConsent';
+import { REMOVAL_LOCKED_MESSAGE, canAddGuests, holderCheckedIn, someoneCheckedIn } from '@/features/history/reservationGuests';
 import { useProfilePicture } from '@/features/profile/hooks';
 import { Guilloche } from '@/premium/blocks';
 import {
@@ -169,13 +178,22 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
      to this reservation, never the selection itself. */
   const checkIns = checkInsOn(b, [...(bookingsList.data ?? []), linked.data]);
   const today = isoDay();
+  /* You (the account holder) checked in on it: nobody can be removed any
+     more. Until then family members can be taken off, also after one of them
+     checked in. Anyone checked in on it: it can't be deleted. Family members
+     can still be added until its dates pass. */
+  const removalLocked = isReservation && holderCheckedIn(b, [...(bookingsList.data ?? []), linked.data], selfPersonId);
+  const deleteLocked = isReservation && someoneCheckedIn(b, [...(bookingsList.data ?? []), linked.data]);
+  const addOpen = isReservation && canAddGuests(b);
   /* Document sharing: at a venue whose check-ins release everyone's
-     documents, each person's own decision (and any still in force). */
+     documents, each person's own decision (and any still in force); at any
+     TruePas venue, the holder's decision for each child selected. */
   const merchant = useMerchant(isReservation ? b.merchantId : null);
   const allPerson = releasesEveryone(merchant.data?.documentAccess);
   const consents = useReservationConsents(isReservation && b.merchantId ? b.id : null);
   const anyShared = b.documentReleaseConsent === true || (consents.data ?? []).some((c) => c.status === 'granted');
-  const showSharing = isReservation && !!b.merchantId && members.length > 0 && (allPerson || anyShared);
+  const hasChild = members.some((x) => isChildMember(family.find((f) => f.id === x)));
+  const showSharing = isReservation && !!b.merchantId && members.length > 0 && (allPerson || anyShared || hasChild);
 
   /* Face check-in card (information only — check-in is at the kiosk) */
   const faceEnrolled = !!user?.faceEnrolled;
@@ -241,6 +259,7 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
   const shareRow = <ListRow icon={Share2} tone="sky" title="Share booking" sub="Send the details to anyone" onPress={shareBooking} />;
 
   const edit = () => router.push({ pathname: '/booking/[id]/edit', params: { id: b.id } } as never);
+  const addGuests = () => router.push({ pathname: '/booking/[id]/add-guests', params: { id: b.id } } as never);
   const doDelete = async () => {
     try {
       await remove.mutateAsync(b.id);
@@ -401,6 +420,7 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
                   </View>
                 )}
               </Card>
+              {removalLocked && <Txt v="small">{REMOVAL_LOCKED_MESSAGE}</Txt>}
             </View>
           )}
 
@@ -408,11 +428,7 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
           {showSharing && (
             <View style={{ gap: 14 }}>
               <SectionHead title="Document sharing" />
-              <Txt v="small">
-                {allPerson
-                  ? `When someone on this reservation checks in at ${b.venue}, the documents of the others who consented themselves are shared too. Choosing someone isn't consent, and children's documents are never shared.`
-                  : `${b.venue} no longer shares documents between guests' check-ins. Consents still in force can be withdrawn.`}
-              </Txt>
+              <Txt v="small">{sharingIntro({ venue: b.venue, allPerson, anyShared, hasChild })}</Txt>
               {consents.isPending ? (
                 <Row gap={10} style={{ paddingHorizontal: 4 }}>
                   <Spinner size={18} />
@@ -447,7 +463,8 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
                     }
                     const member = family.find((f) => f.id === x);
                     const sharing = memberSharing(member, consents.data ?? []);
-                    const canAsk = editable && sharing.canDecide && (allPerson || sharing.shared);
+                    // A child's decision is the holder's, at any TruePas venue.
+                    const canAsk = editable && sharing.canDecide && (allPerson || sharing.shared || sharing.child === true);
                     return (
                       <ListRow
                         key={`${x}-${i}`}
@@ -589,11 +606,30 @@ function BookingDetail({ b, from, refetch }: { b: Booking; from?: string; refetc
             </Group>
           )}
 
-          {/* ---------- the customer's own upcoming reservation ---------- */}
-          {editable && (
+          {/* ---------- the customer's own reservation: add people (and take
+              them off until you've checked in); edit while you haven't, delete
+              only while nobody on it has checked in ---------- */}
+          {(addOpen || (editable && !removalLocked)) && (
             <Group title="Reservation">
-              <ListRow icon={Pencil} tone="sky" title="Edit reservation" sub="Venue, location, who's going, dates and notes" onPress={edit} />
-              <ListRow icon={Trash2} danger title="Delete reservation" chevron={false} onPress={() => setConfirmDelete(true)} />
+              {addOpen && (
+                <ListRow
+                  icon={UserPlus}
+                  tone="sky"
+                  title="Add family members"
+                  sub={
+                    removalLocked
+                      ? 'Each person checks in for themselves at the kiosk'
+                      : 'Add or take off family members · each checks in for themselves'
+                  }
+                  onPress={addGuests}
+                />
+              )}
+              {editable && !removalLocked && (
+                <ListRow icon={Pencil} tone="sky" title="Edit reservation" sub="Venue, location, who's going, dates and notes" onPress={edit} />
+              )}
+              {editable && !deleteLocked && (
+                <ListRow icon={Trash2} danger title="Delete reservation" chevron={false} onPress={() => setConfirmDelete(true)} />
+              )}
             </Group>
           )}
         </View>

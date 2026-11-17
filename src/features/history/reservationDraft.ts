@@ -55,20 +55,48 @@ export interface ConsentChoice {
 
 export type DraftErrors = Partial<Record<keyof ReservationDraft, string>>;
 
-/** The account holder, who can go on their own reservation too. */
+/** The account holder, who can go on their own reservation too.
+ *  `documentVerified`: their own ID is verified (GET /identity/summary
+ *  `status`); undefined or null while not known yet. */
 export interface ReservationSelf {
   personId: string;
   name: string;
+  documentVerified?: boolean | null;
 }
 
 /** Someone who can be chosen: `name` is what the form shows ("You" for the
- *  holder), `detail` their full name or relationship. */
+ *  holder), `detail` their full name or relationship. `notVerified`: why they
+ *  can't be added yet (no verified ID of their own), or null. */
 export interface ReservationPerson {
   personId: string;
   name: string;
   detail: string;
   self: boolean;
+  notVerified?: string | null;
 }
+
+/** Everyone on a reservation needs their own verified ID document; nobody
+ *  else's counts for them (a parent's ID never qualifies their child). The
+ *  server checks it again with identity-proofing when someone is added
+ *  (MEMBER_DOCUMENT_NOT_VERIFIED), so this only keeps the form honest. */
+export const MEMBER_DOCUMENT_NOT_VERIFIED = 'MEMBER_DOCUMENT_NOT_VERIFIED';
+export const SELF_NOT_VERIFIED = 'Verify your ID first to go on a reservation';
+export const MEMBER_NOT_VERIFIED = "Their ID isn't verified yet";
+export const MEMBER_VERIFICATION_FAILED = "Their ID couldn't be verified or has expired";
+
+/** Why a family member can't be added yet, from their `verification` (the
+ *  server's copy of identity-proofing's answer): "verified" (ID and face) and
+ *  "pending_face" (ID verified, face still to add) qualify; "pending_document"
+ *  (no verified ID yet: none added, or one still being checked),
+ *  "verification_failed" (failed, rejected or expired) and anything else don't. */
+export function memberNotVerified(verification: string | null | undefined): string | null {
+  if (verification === 'verified' || verification === 'pending_face') return null;
+  return verification === 'verification_failed' ? MEMBER_VERIFICATION_FAILED : MEMBER_NOT_VERIFIED;
+}
+
+/** A person the form lets you tick: verified, or already on the reservation
+ *  (someone already on it is never taken off for it, as the server keeps them). */
+export const choosable = (p: ReservationPerson, kept: string[]) => !p.notVerified || kept.includes(p.personId);
 
 export const EMPTY_DRAFT: ReservationDraft = {
   venue: '',
@@ -116,10 +144,18 @@ export const sameSet = (a: string[], b: string[]) => a.length === b.length && a.
 /** You first, then every family member by their actual name. */
 export function reservationPeople(self: ReservationSelf | null, family: FamilyMember[]): ReservationPerson[] {
   const people: ReservationPerson[] = [];
-  if (self?.personId) people.push({ personId: self.personId, name: 'You', detail: self.name, self: true });
+  if (self?.personId) {
+    people.push({
+      personId: self.personId, name: 'You', detail: self.name, self: true,
+      notVerified: self.documentVerified === false ? SELF_NOT_VERIFIED : null,
+    });
+  }
   for (const m of family) {
     if (!m?.id || !m.name?.trim() || m.id === self?.personId || people.some((p) => p.personId === m.id)) continue;
-    people.push({ personId: m.id, name: m.name.trim(), detail: m.relationship ?? '', self: false });
+    people.push({
+      personId: m.id, name: m.name.trim(), detail: m.relationship ?? '', self: false,
+      notVerified: memberNotVerified(m.verification),
+    });
   }
   return people;
 }

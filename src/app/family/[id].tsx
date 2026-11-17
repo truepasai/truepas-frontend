@@ -550,7 +550,7 @@ export default function FamilyMemberScreen() {
         danger
         icon={Trash2}
         title={`Remove ${m.name}?`}
-        body={`${first} will be removed from your family.`}
+        body={`${first} will be removed from your family and from reservations you haven't checked in on yet. Check-ins ${first} already made, and anything already shared with a venue, stay with that venue.`}
         confirmLabel="Remove member"
         loading={removeMember.isPending}
         onConfirm={() => void doRemove()}

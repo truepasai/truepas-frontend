@@ -219,8 +219,10 @@ export interface ReservationConsentDecision {
   decision: 'granted' | 'declined' | 'withdrawn';
   /** The consent text shown (RESERVATION_DOCUMENT_TERMS). */
   termsVersion: string;
-  livenessSessionId: string;
-  sessionToken: string;
+  /** An adult's own live face capture. Omitted for a child: their parent or
+   *  guardian (the signed-in holder) decides. */
+  livenessSessionId?: string;
+  sessionToken?: string;
 }
 
 /** GET /merchants/{merchantId}/locations — an active location of the venue. */
