@@ -14,6 +14,7 @@ import {
     scanDocument,
 } from '@/features/documents/regulaScanner';
 import { imageLabel } from '@/features/documents/verifyLog';
+import { normalizeDocumentPhoto } from '@/features/family/photoNormalizeNative';
 import { DocScanView, ScanPill, type ScanFrameSize } from '@/premium/DocScanView';
 import { docMeta } from '@/premium/flows/documents';
 import { C } from '@/premium/theme';
@@ -105,8 +106,14 @@ export default function DocumentScanScreen() {
 
   // ── Regula native scanner state ──────────────────────────────────────────
   const regulaAvailable = useMemo(() => isRegulaAvailable(), []);
-  // False → the manual expo-camera flow ("Use camera instead").
-  const [useRegula, setUseRegula] = useState(regulaAvailable);
+  // False → the manual expo-camera flow ("Use camera instead"). A full-page
+  // paper document always uses the camera: Regula's on-device scanner is built
+  // for ID cards and passports, and on an A4 sheet it crops to what it locates
+  // and hands back frames whose orientation the app can't see (Android:
+  // Bitmap → JPEG with no EXIF; iOS: PNG, which drops the image orientation).
+  // The camera photo is turned upright from its own EXIF tag and sent whole;
+  // the server's Regula still reads it.
+  const [useRegula, setUseRegula] = useState(regulaAvailable && !fullPage);
   const [regulaReady, setRegulaReady] = useState(false);
   const [regulaInitFailed, setRegulaInitFailed] = useState(false);
   const [regulaBusy, setRegulaBusy] = useState(false);
@@ -133,9 +140,9 @@ export default function DocumentScanScreen() {
       });
 
   useEffect(() => {
-    if (!regulaAvailable) return;
+    if (!regulaAvailable || fullPage) return;
     void initRegula();
-  }, [regulaAvailable]);
+  }, [regulaAvailable, fullPage]);
 
   const retryRegulaInit = () => {
     setRegulaInitFailed(false);
@@ -178,6 +185,26 @@ export default function DocumentScanScreen() {
   const handleCapture = async () => {
     if (!cameraRef.current || capturing) return;
     setCapturing(true);
+    setScanError(null);
+    if (fullPage) {
+      // The whole photo, upright as it was taken (portrait or landscape),
+      // never cropped: every edge of the page reaches the document reader.
+      try {
+        const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
+        if (!photo?.uri) return;
+        const page = await normalizeDocumentPhoto(photo.uri);
+        setFrontImage(page.base64);
+        setFrontPreview(page.base64);
+        console.log('[DocScan] complete', `upload=full-page-camera ${page.label}`);
+        setStep('done');
+      } catch (e: any) {
+        console.warn('[DocScan] full-page capture failed:', e?.message);
+        setScanError(e?.message || "The photo didn't work. Please try again.");
+      } finally {
+        setCapturing(false);
+      }
+      return;
+    }
     try {
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.8,
@@ -394,7 +421,8 @@ export default function DocumentScanScreen() {
                 source={{ uri: `data:image/jpeg;base64,${previewUri}` }}
                 accessibilityLabel="Captured document"
                 style={StyleSheet.absoluteFill}
-                contentFit="cover"
+                // The whole capture, all four edges, in its own orientation.
+                contentFit="contain"
               />
             ) : null}
           </View>
@@ -481,7 +509,8 @@ export default function DocumentScanScreen() {
       }
       onCameraLayout={(width, height) => setCameraLayout({ width, height })}
       frame={FRONT_FRAME}
-      status="Document photo"
+      status={scanError ?? 'Document photo'}
+      statusTone={scanError ? 'red' : undefined}
       topRight={
         <IconCircle
           icon={torch ? Zap : ZapOff}

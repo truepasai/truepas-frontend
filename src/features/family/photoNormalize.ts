@@ -27,6 +27,30 @@ const DECODE_QUALITY = 0.92;
 /** Well under face-opensource's 8 MB image limit and the BFF's 20 MB body. */
 export const MAX_PHOTO_BYTES = 3 * 1024 * 1024;
 
+/** How large the prepared JPEG may be, and how it is encoded. */
+export interface PhotoLimits {
+  longSide: number;
+  quality: number;
+  /** One smaller re-encode when the first comes out over `maxBytes`. */
+  retryQuality: number;
+  maxBytes: number;
+}
+
+/** The enrolment photo (the defaults of normalizePhoto). */
+export const ENROLMENT_PHOTO_LIMITS: PhotoLimits = {
+  longSide: PHOTO_LONG_SIDE, quality: PHOTO_QUALITY, retryQuality: PHOTO_RETRY_QUALITY, maxBytes: MAX_PHOTO_BYTES,
+};
+
+/**
+ * A full-page paper document (an A4 birth certificate) photographed with the
+ * camera: large enough for the document reader to read its print (2400 px is
+ * about 200 dpi on A4) and well under identity-proofing's 14,000,000-character
+ * base64 field.
+ */
+export const DOCUMENT_PHOTO_LIMITS: PhotoLimits = {
+  longSide: 2400, quality: 0.9, retryQuality: 0.8, maxBytes: 6 * 1024 * 1024,
+};
+
 export type PhotoAction =
   | { resize: { width: number } | { height: number } }
   | { rotate: number }
@@ -166,11 +190,18 @@ const turnedWrong = (image: { width: number; height: number }, upright: { width:
 const kb = (bytes: number) => `${Math.round(bytes / 1024)}KB`;
 
 /**
- * Prepare a captured photo for enrolment. Throws PhotoNormalizeError with a
- * message the screen can show: an empty or unreadable capture, an output
- * that isn't a complete JPEG, or one still over MAX_PHOTO_BYTES.
+ * Prepare a captured photo for enrolment (or, with DOCUMENT_PHOTO_LIMITS, a
+ * full-page document): upright in the orientation it was taken in, never
+ * cropped, never turned beyond what its own EXIF tag says. Throws
+ * PhotoNormalizeError with a message the screen can show: an empty or
+ * unreadable capture, an output that isn't a complete JPEG, or one still over
+ * `limits.maxBytes`.
  */
-export async function normalizePhoto(uri: string, io: PhotoIO): Promise<NormalizedPhoto> {
+export async function normalizePhoto(
+  uri: string,
+  io: PhotoIO,
+  limits: PhotoLimits = ENROLMENT_PHOTO_LIMITS,
+): Promise<NormalizedPhoto> {
   const source = io.readHead(uri);
   if (!source) throw new PhotoNormalizeError('unreadable', `The photo couldn't be read. ${RETAKE}`);
   if (source.size === 0 || source.head.length === 0) {
@@ -199,29 +230,29 @@ export async function normalizePhoto(uri: string, io: PhotoIO): Promise<Normaliz
   if (!(upright.width > 0 && upright.height > 0)) {
     throw new PhotoNormalizeError('unreadable', `The photo couldn't be read. ${RETAKE}`);
   }
-  const resize = resizeFor(upright.width, upright.height);
+  const resize = resizeFor(upright.width, upright.height, limits.longSide);
   const sizeActions = resize ? [resize] : [];
 
   let actions = sizeActions;
-  let out = await encode(from, actions, PHOTO_QUALITY);
+  let out = await encode(from, actions, limits.quality);
   if (header && isQuarterTurn(header.orientation) && turnedWrong(out, upright)) {
     // Decoding kept the pixels as stored and dropped the EXIF tag, which
     // would send the face sideways: turn them here.
     actions = [...exifActions(header.orientation), ...sizeActions];
-    out = await encode(from, actions, PHOTO_QUALITY);
+    out = await encode(from, actions, limits.quality);
     if (turnedWrong(out, upright)) {
       throw new PhotoNormalizeError('unreadable', `The photo couldn't be turned upright. ${RETAKE}`);
     }
   }
-  if (Math.max(out.width, out.height) > PHOTO_LONG_SIDE + 1) {
+  if (Math.max(out.width, out.height) > limits.longSide + 1) {
     throw new PhotoNormalizeError('not_jpeg', `The photo couldn't be resized. ${RETAKE}`);
   }
 
   let bytes = checkJpeg(out, io.readHeader);
-  if (bytes > MAX_PHOTO_BYTES) {
-    out = await encode(from, actions, PHOTO_RETRY_QUALITY);
+  if (bytes > limits.maxBytes) {
+    out = await encode(from, actions, limits.retryQuality);
     bytes = checkJpeg(out, io.readHeader);
-    if (bytes > MAX_PHOTO_BYTES) {
+    if (bytes > limits.maxBytes) {
       throw new PhotoNormalizeError('too_large', `The photo is too large to send. ${RETAKE}`);
     }
   }

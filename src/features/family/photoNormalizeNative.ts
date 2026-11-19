@@ -8,7 +8,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 
 import { readImageHeader } from '@/utils/imageHeader';
 
-import { normalizePhoto, type NormalizedPhoto, type PhotoAction, type PhotoIO } from './photoNormalize';
+import { DOCUMENT_PHOTO_LIMITS, normalizePhoto, type NormalizedPhoto, type PhotoAction, type PhotoIO } from './photoNormalize';
 
 const HEAD_BYTES = 256 * 1024;
 
@@ -48,6 +48,11 @@ const deviceIO: PhotoIO = {
 
 /** A captured photo as an upright JPEG of at most 1600 px, checked byte by byte. */
 export const normalizeEnrollmentPhoto = (uri: string): Promise<NormalizedPhoto> => normalizePhoto(uri, deviceIO);
+
+/** A full-page document photo (A4 birth certificate) as an upright, uncropped
+ *  JPEG of at most 2400 px, in the orientation it was taken in. */
+export const normalizeDocumentPhoto = (uri: string): Promise<NormalizedPhoto> =>
+  normalizePhoto(uri, deviceIO, DOCUMENT_PHOTO_LIMITS);
 
 /** Whether the prepared JPEG is still on disk and not empty, just before the face check opens it. */
 export function preparedPhotoReadable(uri: string): boolean {

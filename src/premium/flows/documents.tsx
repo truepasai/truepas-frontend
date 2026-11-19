@@ -298,8 +298,9 @@ export function FlipCard({
           <Image
             source={{ uri: scanUri }}
             style={StyleSheet.absoluteFill}
-            // The frame already has the scan's shape, so cover fills it exactly.
-            contentFit="cover"
+            // The frame takes the scan's shape within its height limits; a
+            // scan taller than that (an A4 page) is shown whole, never cropped.
+            contentFit="contain"
             cachePolicy="memory"
             accessibilityLabel="Document scan"
             onLoad={(e) => {
@@ -516,18 +517,22 @@ export function StepList({ steps }: { steps: { label: string; detail?: string; s
 
 /* ───────────────────────── scan hero ───────────────────────── */
 
-/** The captured document photo, tilted, with a sky scan beam while `scanning`. */
+/** The captured document photo, tilted, with a sky scan beam while `scanning`.
+ *  Shaped like the photo once it loads (a portrait A4 page stands tall, a
+ *  card lies flat) and shown whole: never cropped, never turned. */
 export function ScanHero({
   uri,
   scanning,
   width = 300,
-  height = 190,
+  height: initialHeight = 190,
 }: {
   uri: string;
   scanning?: boolean;
   width?: number;
   height?: number;
 }) {
+  const [ratio, setRatio] = useState<number | null>(null);
+  const height = ratio ? Math.min(Math.max(Math.round(width / ratio), 150), 440) : initialHeight;
   const [v] = useState(() => new Animated.Value(0));
   useEffect(() => {
     const l = Animated.loop(
@@ -543,7 +548,16 @@ export function ScanHero({
   return (
     <View style={[{ width, height, borderRadius: R.xl, transform: [{ rotate: '-4deg' }] }, SH.lg]}>
       <View style={{ width, height, borderRadius: R.xl, overflow: 'hidden', backgroundColor: C.navyNight }}>
-        <Image source={{ uri }} style={StyleSheet.absoluteFill} contentFit="cover" accessibilityLabel="Captured document" />
+        <Image
+          source={{ uri }}
+          style={StyleSheet.absoluteFill}
+          contentFit="contain"
+          accessibilityLabel="Captured document"
+          onLoad={(e) => {
+            const { width: w, height: h } = e.source;
+            if (w > 0 && h > 0) setRatio(w / h);
+          }}
+        />
         {scanning && (
           <Animated.View style={{ position: 'absolute', left: 0, right: 0, top: 0, transform: [{ translateY: y }] }}>
             <LinearGradient colors={['rgba(8,182,252,0)', 'rgba(8,182,252,0.4)', 'rgba(8,182,252,0)']} style={{ height: 46 }} />
