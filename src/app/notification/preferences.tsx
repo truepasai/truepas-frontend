@@ -4,17 +4,19 @@
  * Four push categories; each toggle sends only its own key (optimistic, rolls
  * back on error). Off stops push only: the inbox still records the item.
  * `security` covers both account and identity notifications.
- * The app doesn't receive push yet (no push token registration), so the copy
- * says phone notifications are coming soon — the choices are stored for then.
+ * The phone registers for push after sign-in (services/pushNotifications);
+ * if the OS permission is off, the note below points to the phone's settings.
  */
 import { CalendarClock, FileText, type LucideIcon, ShieldCheck, Users } from 'lucide-react-native';
-import { View } from 'react-native';
+import * as Notifications from 'expo-notifications';
+import { useEffect, useState } from 'react';
+import { AppState, Linking, Platform, View } from 'react-native';
 
 import { useNotificationPreferences, useUpdateNotificationPreferences } from '@/features/notifications/hooks';
 import { useToast } from '@/hooks/useToast';
 import { Async, Bone } from '@/premium/kit';
 import { C } from '@/premium/theme';
-import { Card, Divider, Group, Heading, ListRow, Screen, Toggle, TopBar, Txt } from '@/premium/ui';
+import { Button, Card, Divider, Group, Heading, ListRow, Screen, Toggle, TopBar, Txt } from '@/premium/ui';
 import type { NotificationPreferences } from '@/types/domain';
 
 const ROWS: { key: keyof NotificationPreferences; icon: LucideIcon; title: string; sub: string }[] = [
@@ -48,10 +50,28 @@ function PrefsSkeleton() {
   );
 }
 
+/** True when the OS blocks notifications for the app. Re-checked on return
+ *  from the phone's settings. Always false on web (no push there). */
+function usePushPermissionOff() {
+  const [off, setOff] = useState(false);
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const check = () =>
+      void Notifications.getPermissionsAsync()
+        .then((p) => setOff(!p.granted))
+        .catch(() => {});
+    check();
+    const sub = AppState.addEventListener('change', (s) => s === 'active' && check());
+    return () => sub.remove();
+  }, []);
+  return off;
+}
+
 export default function NotificationPreferencesScreen() {
   const toast = useToast();
   const prefs = useNotificationPreferences();
   const update = useUpdateNotificationPreferences();
+  const pushOff = usePushPermissionOff();
 
   const set = (key: keyof NotificationPreferences, on: boolean) =>
     update.mutate({ [key]: on }, { onError: () => toast.show('error', "Couldn't save that. Try again.") });
@@ -80,9 +100,14 @@ export default function NotificationPreferencesScreen() {
                 />
               ))}
             </Group>
-            <Txt v="small" color={C.ink4} center>
-              Phone notifications are coming soon. Your choices will apply once they&apos;re live.
-            </Txt>
+            {pushOff && (
+              <View style={{ gap: 8, alignItems: 'center' }}>
+                <Txt v="small" color={C.ink4} center>
+                  Notifications are turned off for TruePas on this phone. Turn them on in your phone&apos;s settings to get these alerts.
+                </Txt>
+                <Button label="Open phone settings" tone="ghost" onPress={() => void Linking.openSettings()} />
+              </View>
+            )}
           </View>
         )}
       </Async>

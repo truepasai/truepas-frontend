@@ -57,6 +57,14 @@
       ],
       "expo-secure-store",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/truepas-adaptive-monochrome.png",
+          "color": "#08B6FC",
+          "defaultChannel": "default"
+        }
+      ],
+      [
         "expo-camera",
         {
           "cameraPermission": "Camera is required for document scanning and face recognition",

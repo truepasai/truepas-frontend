@@ -6,6 +6,7 @@ import { useLogout } from '@/features/auth/mutations';
 import { sessionEnded } from '@/features/auth/slice';
 import { resetMemberPhotoSync } from '@/features/family/hooks';
 import { clearAllProfileImages } from '@/services/profileImageStore';
+import { forgetPushDevice, unregisterFromPush } from '@/services/pushNotifications';
 import { secureStorage } from '@/services/secureStorage';
 import { useAppDispatch } from '@/store';
 
@@ -44,7 +45,13 @@ export function useLogoutFlow() {
 
   const logout = useCallback(
     async ({ serverRevoked = false }: LogoutOptions = {}) => {
-      if (!serverRevoked) {
+      if (serverRevoked) {
+        // DELETE would 401 on the revoked token; the backend re-binds the
+        // token on the next sign-in.
+        forgetPushDevice();
+      } else {
+        // Needs the live session, so before /auth/logout.
+        await unregisterFromPush();
         try {
           const refreshToken = await secureStorage.getRefreshToken();
           if (refreshToken) {

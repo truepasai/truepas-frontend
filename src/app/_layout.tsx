@@ -11,7 +11,9 @@ import { SessionExpiredError, setOnSessionExpired } from '@/api/client';
 import { FieldLabelStyleProvider, ToastProvider } from '@/components/composite';
 import { sessionEnded } from '@/features/auth/slice';
 import { resetMemberPhotoSync } from '@/features/family/hooks';
+import { usePushNotifications } from '@/features/notifications/usePushNotifications';
 import { clearAllProfileImages } from '@/services/profileImageStore';
+import { forgetPushDevice } from '@/services/pushNotifications';
 import { store } from '@/store';
 import { AppStatusBar } from '@/premium/statusBar';
 import { C } from '@/premium/theme';
@@ -62,6 +64,7 @@ setOnSessionExpired(() => {
   // here lost every passport photo on token expiry (see useLogoutFlow).
   void clearAllProfileImages().catch(() => {});
   resetMemberPhotoSync();
+  forgetPushDevice();
   if (router.canDismiss()) {
     router.dismissAll();
   }
@@ -72,6 +75,7 @@ setOnSessionExpired(() => {
 
 function RootShell({ children }: { children: React.ReactNode }) {
   const [fontsLoaded, fontError] = useTruepasFonts();
+  usePushNotifications();
   useEffect(() => {
     if (fontError) console.warn('[Fonts] failed to load — using system fonts', fontError);
   }, [fontError]);
